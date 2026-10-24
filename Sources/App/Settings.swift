@@ -75,6 +75,18 @@ final class Settings {
         set { defaults.set(newValue, forKey: "DeclinedMoveToApplications") }
     }
 
+    /// Look for a newer release on GitHub once a day.
+    var checkForUpdatesAutomatically: Bool {
+        get { defaults.object(forKey: "CheckForUpdatesAutomatically") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "CheckForUpdatesAutomatically") }
+    }
+
+    /// A release the person chose to skip, so the daily check doesn't offer it again.
+    var skippedUpdateVersion: String? {
+        get { defaults.string(forKey: "SkippedUpdateVersion") }
+        set { defaults.set(newValue, forKey: "SkippedUpdateVersion") }
+    }
+
     var didExplainHiddenMenuBarIcon: Bool {
         get { defaults.bool(forKey: "DidExplainHiddenMenuBarIcon") }
         set { defaults.set(newValue, forKey: "DidExplainHiddenMenuBarIcon") }

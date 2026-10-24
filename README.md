@@ -83,6 +83,40 @@ versions of macOS may now and then ask you to confirm that DeskKit can still rec
    (*Device Control and Data Access* in macOS 27), and under *Screen Recording* if you want window
    previews. macOS keeps these when you update DeskKit.
 
+### Install with an AI agent
+
+Paste this into Claude Code, Codex, Antigravity or any agent that can run commands on your Mac:
+
+```text
+Install DeskKit on this Mac. It's a free, open-source menu bar app
+(https://github.com/christopherquenneville/DeskKit): a Dock on every display, a window picker
+and mouse wheel reversal.
+
+1. Download https://github.com/christopherquenneville/DeskKit/releases/latest/download/DeskKit.zip
+   into a new empty temporary folder, and unzip it there with: ditto -x -k DeskKit.zip .
+2. Check it before installing. Both commands must succeed, and spctl must report
+   "source=Notarized Developer ID" and
+   "origin=Developer ID Application: Christopher Quenneville Barbeau (QW9M3FTB2B)":
+     codesign --verify --deep --strict DeskKit.app
+     spctl --assess --type execute -vv DeskKit.app
+   If either check fails, stop and tell me.
+3. If DeskKit is running, quit it (pkill -x DeskKit). Move any older /Applications/DeskKit.app
+   to the Trash, then move the new DeskKit.app into /Applications.
+4. Open it: open /Applications/DeskKit.app
+5. Tell me to switch DeskKit on in System Settings → Privacy & Security → Accessibility
+   ("Device Control and Data Access" on macOS 27), and under "Screen & System Audio Recording"
+   for window previews. Don't change privacy settings yourself; those switches are mine.
+```
+
+### Updates
+
+A minute after it starts and then once a day, DeskKit asks GitHub for its latest release (an
+anonymous request to `api.github.com`; nothing about you or your Mac is sent). When there's a newer
+version it offers to install it, and *Check for Updates…* in its menu checks right away. An update
+is installed only if it's signed by the same developer as the copy you have and notarized by Apple,
+and DeskKit restarts into it with its settings and permissions. Untick *Check for updates
+automatically* in the update window to stop the daily check.
+
 ### Build it yourself
 
 You need Apple's command line tools (`xcode-select --install`); there's no Xcode project.

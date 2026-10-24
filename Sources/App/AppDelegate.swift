@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let picker = WindowPicker()
     private let dockClicks = DockClickWatcher()
     private let scroll = ScrollFlipper()
+    private let updater = Updater()
     private var statusItem: NSStatusItem?
     private let statusMenu = NSMenu()
     private var activity: NSObjectProtocol?
@@ -54,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(timer, forMode: .common)
         permissionTimer = timer
         askForPermissionsIfNeeded()
+        updater.start()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -227,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addToggle(to: menu, "Show in Menu Bar", #selector(toggleMenuBarIcon(_:)), settings.showInMenuBar)
         menu.addItem(.separator())
         menu.addItem(item("About DeskKit", #selector(showAbout(_:))))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates(_:))))
         let quit = NSMenuItem(title: "Quit DeskKit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
@@ -338,6 +341,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.informativeText = "To get this menu back, right-click an empty part of one of DeskKit's Docks, or open DeskKit again from your Applications folder."
             alert.runModal()
         }
+    }
+
+    @objc private func checkForUpdates(_ sender: NSMenuItem) {
+        updater.check(userInitiated: true)
     }
 
     @objc private func showAbout(_ sender: NSMenuItem) {

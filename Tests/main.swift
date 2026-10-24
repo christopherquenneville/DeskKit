@@ -33,6 +33,23 @@ MainActor.assumeIsolated {
     let tall = WindowPreviews.fit(CGSize(width: 600, height: 1200), into: CGSize(width: 200, height: 124))
     check("a tall window's preview fills the height", abs(tall.height - 124) < 0.01 && abs(tall.width - 62) < 0.01)
 
+    // MARK: Updates
+
+    check("1.0.10 is newer than 1.0.9", Updater.isNewer("1.0.10", than: "1.0.9"))
+    check("1.1 is newer than 1.0.5", Updater.isNewer("1.1", than: "1.0.5"))
+    check("1.0 isn't newer than 1.0.0", !Updater.isNewer("1.0", than: "1.0.0"))
+    check("an older version isn't newer", !Updater.isNewer("1.0.1", than: "1.0.2"))
+    let answer = """
+        {"tag_name": "v1.2.0", "body": "**Faster** previews", "draft": false,
+         "html_url": "https://github.com/christopherquenneville/DeskKit/releases/tag/v1.2.0",
+         "assets": [{"name": "Other.zip", "browser_download_url": "https://example.com/Other.zip"},
+                    {"name": "DeskKit.zip", "browser_download_url": "https://github.com/christopherquenneville/DeskKit/releases/download/v1.2.0/DeskKit.zip"}]}
+        """
+    let release = try? Updater.release(from: Data(answer.utf8))
+    check("a release's version comes from its tag", release?.version == "1.2.0")
+    check("the download is the release's DeskKit.zip", release?.download.lastPathComponent == "DeskKit.zip" && release?.download.host == "github.com")
+    check("release notes lose their Markdown marks", Updater.plainText(release?.notes ?? "") == "Faster previews")
+
     // MARK: Magnification on a Dock that fills its screen
 
     // A left Dock on a 900 pt screen with a 30 pt menu bar, full enough that magnifying it can't fit.
