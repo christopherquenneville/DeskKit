@@ -80,6 +80,14 @@ final class BarView: NSView {
     private var dropID: String?
     private var bounces: [String: Bounce] = [:]
     private var cachedLayout: BarLayout?
+    /// Layout changes (from the pointer, magnification, sliding) are drawn on the controller's next
+    /// frame, so a fast mouse doesn't cause a redraw per event.
+    private var layoutPending = false
+    private var hoveredSlot: Int?
+    /// Each icon drawn once into a bitmap at its largest size, in the window's colours: drawing the
+    /// NSImage itself picks a representation and converts colours on every frame, which made
+    /// magnifying cost several times more.
+    private var bitmaps: [String: (icon: NSImage, image: CGImage)] = [:]
 
     private struct Bounce {
         var start: CFTimeInterval
@@ -93,8 +101,11 @@ final class BarView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsRedrawPolicy = .never
         registerForDraggedTypes([.fileURL])
+        // The pointer is only reported while it's over the bar (where the hit fill is), never elsewhere.
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
     }
 
     required init?(coder: NSCoder) { nil }
@@ -104,13 +115,24 @@ final class BarView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
+        renderAgain()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        renderAgain()
     }
 
     func configure(tiles: [Tile], icons: [String: NSImage], metrics: BarMetrics, orientation: DockOrientation,
                    maxScale: CGFloat, center: CGFloat, visibleRange: ClosedRange<CGFloat>, prefs: DockPrefs) {
         self.tiles = tiles
         self.icons = icons
+        bitmaps = bitmaps.filter { icons[$0.key] != nil }
+        if metrics.tile * maxScale != self.metrics.tile * self.maxScale {
+            bitmaps.removeAll()
+            darkBitmaps.removeAll()
+            badgeImages.removeAll()
+        }
         self.metrics = metrics
         self.orientation = orientation
         self.maxScale = maxScale
@@ -172,8 +194,17 @@ final class BarView: NSView {
 
     private func layoutChanged() {
         cachedLayout = nil
-        needsDisplay = true
+        layoutPending = true
+        controller?.startAnimating()
+    }
+
+    /// Shows a pending layout change; returns whether there was one.
+    func applyPendingLayout() -> Bool {
+        guard layoutPending else { return false }
+        layoutPending = false
+        updateLayers()
         controller?.barLayoutChanged()
+        return true
     }
 
     /// Slot starts and lengths with nothing magnified.
@@ -286,7 +317,8 @@ final class BarView: NSView {
     /// Returns whether the pointer is over the bar.
     @discardableResult
     func pointerMoved(to point: NSPoint?) -> Bool {
-        let inside = point.map { tileIndex(at: $0) != nil } ?? false
+        let index = point.flatMap { tileIndex(at: $0) }
+        let inside = index != nil
         if inside, let point {
             let u = barCoordinates(point).u
             if u != pointerU {
@@ -298,7 +330,12 @@ final class BarView: NSView {
             isHovering = inside
             controller?.startAnimating()
         }
-        controller?.hoverChanged()
+        if index != hoveredSlot {
+            // The name label moves on the next frame, not on every pointer event.
+            hoveredSlot = index
+            layoutPending = true
+            controller?.startAnimating()
+        }
         return inside
     }
 
@@ -355,94 +392,224 @@ final class BarView: NSView {
                     bounces[id] = nil
                 }
             }
-            needsDisplay = true
+            layoutPending = true
             running = running || !bounces.isEmpty
         }
         return running
     }
 
-    // MARK: Drawing
+    // MARK: Rendering
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+    /// The bar is made of Core Animation layers rather than drawn: each icon is a layer showing a
+    /// bitmap made once, so magnifying, sliding and bouncing only move and resize layers, and the
+    /// GPU does the scaling, as it does for the Dock.
+    private struct TileLayers {
+        let icon = CALayer()
+        let badge = CALayer()
+        let dot = CALayer()
+        var image: CGImage?
+        var badgeText: String?
+    }
+
+    private var tileLayers: [String: TileLayers] = [:]
+    private var separatorLayers: [CALayer] = []
+    /// The window server lets clicks through fully transparent pixels, so every slot's hit area (out
+    /// to the screen edge, and up to a magnified icon's top) gets an invisible solid layer.
+    private var hitLayers: [CALayer] = []
+    private var darkBitmaps: [String: CGImage] = [:]
+    private var badgeImages: [String: CGImage] = [:]
+
+    /// Puts every layer where the layout says, without implicit animations (the bar animates itself).
+    private func updateLayers() {
+        guard let root = layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
         let layout = layout
         let m = metrics
         let dark = effectiveAppearance.isDark
         let now = CACurrentMediaTime()
 
-        // The window server passes clicks through fully transparent pixels, so give every slot's
-        // hit area (out to the screen edge, and up to a magnified icon's top) an invisible fill.
-        NSColor(white: 1, alpha: 1 / 255).setFill()
-        for i in layout.slots.indices {
+        while hitLayers.count < layout.slots.count {
+            let hit = CALayer()
+            hit.backgroundColor = NSColor(white: 1, alpha: 1 / 255).cgColor
+            hit.zPosition = -1
+            root.addSublayer(hit)
+            hitLayers.append(hit)
+        }
+        for (i, hit) in hitLayers.enumerated() {
+            guard i < layout.slots.count else {
+                hit.isHidden = true
+                continue
+            }
             let low = i == 0 ? layout.start : (layout.slots[i - 1].center + layout.slots[i].center) / 2
             let high = i == layout.slots.count - 1 ? layout.end : (layout.slots[i].center + layout.slots[i + 1].center) / 2
-            viewRect(u0: low, u1: high, v0: 0, v1: reach(of: i, in: layout)).fill()
+            hit.frame = viewRect(u0: low, u1: high, v0: 0, v1: reach(of: i, in: layout))
+            hit.isHidden = false
         }
 
+        var seen = Set<String>()
+        var separators = 0
         for (i, tile) in tiles.enumerated() where i < layout.slots.count {
             let slot = layout.slots[i]
             switch tile.kind {
             case .spacer, .smallSpacer:
                 continue
             case .separator:
-                let line = viewRect(u0: slot.center - 0.5, u1: slot.center + 0.5, v0: iconBase, v1: iconBase + m.tile)
-                (dark ? NSColor(white: 1, alpha: 0.4) : NSColor(white: 0, alpha: 0.18)).setFill()
-                backingAlignedRect(line, options: .alignAllEdgesNearest).fill()
+                if separators == separatorLayers.count {
+                    separatorLayers.append(CALayer())
+                    root.addSublayer(separatorLayers[separators])
+                }
+                let line = separatorLayers[separators]
+                separators += 1
+                line.isHidden = false
+                line.frame = backingAlignedRect(viewRect(u0: slot.center - 0.5, u1: slot.center + 0.5, v0: iconBase, v1: iconBase + m.tile),
+                                                options: .alignAllEdgesNearest)
+                line.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.4) : NSColor(white: 0, alpha: 0.18)).cgColor
             default:
-                guard let icon = icons[tile.id] else { continue }
+                seen.insert(tile.id)
+                var layers = tileLayers[tile.id] ?? makeTileLayers(in: root)
                 let size = m.tile * slot.scale
                 let lift = bounceLift(tile.id, size: size, now: now)
                 let rect = viewRect(u0: slot.center - size / 2, u1: slot.center + size / 2,
                                     v0: iconBase + lift, v1: iconBase + lift + size)
                 let darken = (tile.id == pressedID && pressInside) || tile.id == dropID
-                drawIcon(icon, in: rect, darken: darken, alpha: dimHiddenApps && tile.hidden ? 0.5 : 1, context: context)
-                if let badge = tile.badge { drawBadge(badge, iconRect: rect) }
+                let image = darken ? darkBitmap(for: tile.id) : bitmap(for: tile.id)
+                if image !== layers.image {
+                    layers.icon.contents = image
+                    layers.image = image
+                }
+                layers.icon.frame = rect
+                layers.icon.opacity = dimHiddenApps && tile.hidden ? 0.5 : 1
+
+                if let text = tile.badge, let badge = badgeImage(text) {
+                    if layers.badgeText != text {
+                        layers.badge.contents = badge
+                        layers.badgeText = text
+                    }
+                    // A 16 pt circle at a 42 pt tile, in the icon's top-right corner, stretched for longer text.
+                    let height = size * 16 / 42, inset = size * 0.5 / 42
+                    let width = height * CGFloat(badge.width) / CGFloat(max(1, badge.height))
+                    layers.badge.frame = NSRect(x: rect.maxX - inset - width, y: rect.maxY - inset - height, width: width, height: height)
+                    layers.badge.isHidden = false
+                } else {
+                    layers.badge.isHidden = true
+                    layers.badgeText = nil
+                }
+
                 if showIndicators && tile.isRunning {
                     let d = m.dotDiameter
                     let c = viewPoint(u: slot.center, v: BarMetrics.edgeMargin + slideOffset + m.dotOffset)
-                    (dark ? NSColor(white: 1, alpha: 0.85) : NSColor(white: 0, alpha: 0.6)).setFill()
-                    NSBezierPath(ovalIn: NSRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)).fill()
+                    layers.dot.frame = NSRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)
+                    layers.dot.cornerRadius = d / 2
+                    layers.dot.backgroundColor = (dark ? NSColor(white: 1, alpha: 0.85) : NSColor(white: 0, alpha: 0.6)).cgColor
+                    layers.dot.isHidden = false
+                } else {
+                    layers.dot.isHidden = true
                 }
+                tileLayers[tile.id] = layers
             }
         }
-    }
-
-    private func drawIcon(_ icon: NSImage, in rect: NSRect, darken: Bool, alpha: CGFloat, context: CGContext) {
-        let hints: [NSImageRep.HintKey: Any] = [.interpolation: NSNumber(value: NSImageInterpolation.high.rawValue)]
-        guard darken else {
-            icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: alpha, respectFlipped: true, hints: hints)
-            return
+        for (id, layers) in tileLayers where !seen.contains(id) {
+            [layers.icon, layers.badge, layers.dot].forEach { $0.removeFromSuperlayer() }
+            tileLayers[id] = nil
         }
-        context.saveGState()
-        context.setAlpha(alpha)
-        context.beginTransparencyLayer(in: rect, auxiliaryInfo: nil)
-        icon.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: hints)
-        context.setBlendMode(.sourceAtop)
-        context.setFillColor(NSColor(white: 0, alpha: 0.35).cgColor)
-        context.fill(rect)
-        context.endTransparencyLayer()
-        context.restoreGState()
+        for line in separatorLayers.dropFirst(separators) { line.isHidden = true }
     }
 
-    /// The red notification badge in the icon's top-right corner: a 16 pt circle at a 42 pt tile,
-    /// stretching into a capsule for longer text.
-    private func drawBadge(_ text: String, iconRect: NSRect) {
-        let size = iconRect.width
-        let height = size * 16 / 42
-        let inset = size * 0.5 / 42
+    private func makeTileLayers(in root: CALayer) -> TileLayers {
+        let layers = TileLayers()
+        for layer in [layers.icon, layers.badge] {
+            layer.contentsGravity = .resize
+            layer.minificationFilter = .trilinear
+            layer.magnificationFilter = .linear
+        }
+        // Badges and dots sit above every icon, even a magnified neighbour's.
+        layers.badge.zPosition = 1
+        layers.dot.zPosition = 1
+        [layers.icon, layers.badge, layers.dot].forEach(root.addSublayer)
+        return layers
+    }
+
+    /// Forgets the bitmaps (for a new display, size or appearance) and lays out again.
+    private func renderAgain() {
+        bitmaps.removeAll()
+        darkBitmaps.removeAll()
+        badgeImages.removeAll()
+        updateLayers()
+    }
+
+    /// The icon's bitmap, made the first time it's needed at the largest size it's drawn (again when
+    /// the icon, the bar's size, the display or the appearance changes), in the window's colours.
+    private func bitmap(for id: String) -> CGImage? {
+        guard let icon = icons[id] else { return nil }
+        if let cached = bitmaps[id], cached.icon === icon { return cached.image }
+        darkBitmaps[id] = nil
+        let side = Int((metrics.tile * maxScale * (window?.backingScaleFactor ?? 2)).rounded(.up))
+        guard let image = render(width: side, height: side, draw: { rect in
+            icon.draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+        }) else { return nil }
+        bitmaps[id] = (icon, image)
+        return image
+    }
+
+    /// The icon darkened as the Dock darkens one being pressed, or one a file would be dropped on.
+    private func darkBitmap(for id: String) -> CGImage? {
+        if let cached = darkBitmaps[id] { return cached }
+        guard let base = bitmap(for: id) else { return nil }
+        let image = render(width: base.width, height: base.height) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return }
+            context.draw(base, in: rect)
+            context.setBlendMode(.sourceAtop)
+            context.setFillColor(NSColor(white: 0, alpha: 0.35).cgColor)
+            context.fill(rect)
+        }
+        darkBitmaps[id] = image
+        return image
+    }
+
+    /// The red notification badge, made at the largest icon size: a capsule as tall as 16/42 of
+    /// the icon, wide enough for the text.
+    private func badgeImage(_ text: String) -> CGImage? {
+        if let cached = badgeImages[text] { return cached }
+        let scale = window?.backingScaleFactor ?? 2
+        let height = metrics.tile * maxScale * 16 / 42 * scale
         let font = NSFont.systemFont(ofSize: height * 0.55)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let textSize = (text as NSString).size(withAttributes: attributes)
         let width = max(height, textSize.width + height * 0.35)
-        let rect = NSRect(x: iconRect.maxX - inset - width, y: iconRect.maxY - inset - height, width: width, height: height)
-        let capsule = NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2)
-        NSColor(srgbRed: 1, green: 0.23, blue: 0.19, alpha: 1).setFill()
-        capsule.fill()
-        (text as NSString).draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2),
-                                withAttributes: attributes)
+        let image = render(width: Int(width.rounded(.up)), height: Int(height.rounded(.up))) { rect in
+            NSColor(srgbRed: 1, green: 0.23, blue: 0.19, alpha: 1).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
+            (text as NSString).draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2),
+                                    withAttributes: attributes)
+        }
+        badgeImages[text] = image
+        return image
+    }
+
+    /// Draws into a new bitmap of `width` × `height` pixels in the window's colour space and appearance.
+    private func render(width: Int, height: Int, draw: (NSRect) -> Void) -> CGImage? {
+        let space = window?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)
+        guard width > 0, height > 0, let space,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            draw(NSRect(x: 0, y: 0, width: width, height: height))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
     }
 
     // MARK: Mouse
+
+    override func mouseEntered(with event: NSEvent) { controller?.manager.pointerMoved() }
+    override func mouseMoved(with event: NSEvent) { controller?.manager.pointerMoved() }
+    override func mouseExited(with event: NSEvent) { controller?.manager.pointerMoved() }
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) {
@@ -452,22 +619,23 @@ final class BarView: NSView {
         guard let i = tileIndex(at: convert(event.locationInWindow, from: nil)), tiles[i].isActionable else { return }
         pressedID = tiles[i].id
         pressInside = true
-        needsDisplay = true
+        updateLayers()
     }
 
     override func mouseDragged(with event: NSEvent) {
+        controller?.manager.pointerMoved()
         guard let id = pressedID else { return }
         let inside = tileIndex(at: convert(event.locationInWindow, from: nil)).map { tiles[$0].id == id } ?? false
         if inside != pressInside {
             pressInside = inside
-            needsDisplay = true
+            updateLayers()
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         guard let id = pressedID else { return }
         pressedID = nil
-        needsDisplay = true
+        updateLayers()
         if let i = tileIndex(at: convert(event.locationInWindow, from: nil)), tiles[i].id == id {
             controller?.manager.open(tiles[i], from: iconRectOnScreen(i))
         }
@@ -530,6 +698,8 @@ final class BarView: NSView {
     }
 
     private func dragMoved(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // Magnify under a dragged file as under the pointer.
+        controller?.manager.pointerMoved()
         guard let controller, let i = tileIndex(at: convert(sender.draggingLocation, from: nil)) else {
             setDropTarget(nil)
             return []
@@ -547,7 +717,7 @@ final class BarView: NSView {
     private func setDropTarget(_ id: String?) {
         if dropID != id {
             dropID = id
-            needsDisplay = true
+            updateLayers()
         }
     }
 }

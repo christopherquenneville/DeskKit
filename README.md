@@ -12,7 +12,8 @@
   traditional way.
 
 Each one can be turned on or off from DeskKit's menu bar icon. DeskKit runs on macOS 12 Monterey and
-later, on Apple silicon and Intel Macs, and uses about 0.1% of one CPU core when idle.
+later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one CPU core and about
+30 MB of memory, and moving the pointer around anywhere but its Docks costs it nothing.
 
 ## A Dock on every display
 
@@ -142,7 +143,13 @@ explains the one-time setup it needs).
 - **Badges** come from LaunchServices. That's private API, looked up at run time; if a future macOS
   removes it, the copies simply show no badges.
 - **Each copy** is a non-activating panel at the Dock's window level, sized tightly around it and kept
-  out of full-screen apps like the Dock is. Clicks pass through its transparent parts.
+  out of full-screen apps like the Dock is. Clicks pass through its transparent parts. Its icons are
+  Core Animation layers showing bitmaps made once, so magnifying only moves and resizes them.
+- **Staying light.** DeskKit never watches the pointer across the whole screen. A copy hears about it
+  only while the pointer is over it (or over a one-point sensor along the edge while the copy is
+  hidden). The Dock's display is checked again when the pointer pushes against a display's Dock edge,
+  which is how the Dock moves, and every 2 seconds besides. With a single display, where no copy can
+  show, DeskKit stops following the Dock and other apps' windows altogether.
 - **Keeping windows clear.** DeskKit watches windows being created, moved and resized through the
   Accessibility API, and once a zoom or tile has settled it pulls the window's edge out of the strip
   the Dock would reserve (the copy plus its gap from the screen edge).

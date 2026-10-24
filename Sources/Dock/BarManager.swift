@@ -2,6 +2,10 @@ import AppKit
 
 /// Keeps one bar on every display except the one the real Dock is on, mirrors the Dock's
 /// contents and settings into them, and carries out what the bars are asked to do.
+///
+/// It never watches the pointer system-wide: each bar hears about it only while the pointer is over
+/// it (or over the edge sensor of a hidden bar), and with a single display, where no bar can show,
+/// it stops following the Dock and other apps' windows altogether.
 @MainActor
 final class BarManager: NSObject {
     let label = LabelPanel()
@@ -13,10 +17,11 @@ final class BarManager: NSObject {
     private let iconStore = IconStore()
     private var dockDisplay: CGDirectDisplayID?
     private var visibleFrames: [CGDirectDisplayID: NSRect] = [:]
-    private var dockTimer: Timer?
     private var prefsTimer: Timer?
     private var coverTimer: Timer?
-    private var monitors: [Any] = []
+    private var pointerTimer: Timer?
+    private var dockWatchTimer: Timer?
+    private var dockWatchTicks = 0
     private var openableCache: [String: Bool] = [:]
     private var ticks = 0
     private var displays: [(screen: NSScreen, id: CGDirectDisplayID)] = []
@@ -36,14 +41,13 @@ final class BarManager: NSObject {
 
     /// Takes every bar down and stops watching, for when the tool is turned off.
     func stop() {
-        for timer in [dockTimer, prefsTimer, coverTimer] { timer?.invalidate() }
-        dockTimer = nil
+        for timer in [prefsTimer, coverTimer, pointerTimer, dockWatchTimer] { timer?.invalidate() }
         prefsTimer = nil
         coverTimer = nil
+        pointerTimer = nil
+        dockWatchTimer = nil
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        monitors.forEach(NSEvent.removeMonitor)
-        monitors.removeAll()
         windowKeeper.stop()
         for bar in bars.values { bar.close() }
         bars.removeAll()
@@ -55,11 +59,8 @@ final class BarManager: NSObject {
         dockDisplay = findDockDisplay()
         rebuildTiles(force: true)
         rebuildBars()
-        dockTimer = repeatingTimer(0.3, #selector(dockTick(_:)))
-        prefsTimer = repeatingTimer(2, #selector(prefsTick(_:)))
-        updateCoverPolling()
         windowKeeper.strips = { [unowned self] in self.bars.values.compactMap(\.keepClearStrip) }
-        updateWindowKeeper()
+        updateActivity()
 
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -72,20 +73,6 @@ final class BarManager: NSObject {
                      NSWorkspace.didDeactivateApplicationNotification] {
             workspace.addObserver(self, selector: #selector(appsChanged(_:)), name: name, object: nil)
         }
-
-        // The pointer, wherever it is. Mouse-moved monitors need no permission.
-        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.pointerMoved() }
-        }) {
-            monitors.append(monitor)
-        }
-        if let monitor = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            MainActor.assumeIsolated { self?.pointerMoved() }
-            return event
-        }) {
-            monitors.append(monitor)
-        }
     }
 
     private func repeatingTimer(_ interval: TimeInterval, _ selector: Selector) -> Timer {
@@ -93,6 +80,28 @@ final class BarManager: NSObject {
         timer.tolerance = interval * 0.2
         RunLoop.main.add(timer, forMode: .common)
         return timer
+    }
+
+    /// Whether any bar can show at all: not with a single display, unless a bar is wanted beside the Dock.
+    private var barsCanShow: Bool {
+        displays.count > 1 || Settings.shared.showOnDockDisplay
+    }
+
+    /// Following the Dock's settings and display, and checking for covering windows, only matter
+    /// while a bar can show; on one display DeskKit goes quiet until another display arrives.
+    private func updateActivity() {
+        if barsCanShow {
+            if prefsTimer == nil {
+                prefsTimer = repeatingTimer(2, #selector(prefsTick(_:)))
+                refreshPrefs(force: true)
+            }
+        } else {
+            for timer in [prefsTimer, dockWatchTimer] { timer?.invalidate() }
+            prefsTimer = nil
+            dockWatchTimer = nil
+        }
+        updateCoverPolling()
+        updateWindowKeeper()
     }
 
     // MARK: Model
@@ -106,7 +115,7 @@ final class BarManager: NSObject {
     }
 
     /// The screens and their display IDs, refreshed when displays change (reading the ID builds a
-    /// dictionary each time, and the Dock check runs every 0.3 s).
+    /// dictionary each time, and the Dock check runs often while the pointer pushes an edge).
     private func refreshDisplays() {
         displays = NSScreen.screens.map { ($0, $0.displayID) }
     }
@@ -156,7 +165,9 @@ final class BarManager: NSObject {
         return displays.first?.id
     }
 
-    @objc private func dockTick(_ timer: Timer) {
+    /// Moves the bars around when the Dock has moved to another display, and follows changes in
+    /// the displays' visible frames.
+    private func checkDockDisplay() {
         let id = findDockDisplay()
         if id != dockDisplay {
             appLog.info("Dock moved from display \(self.dockDisplay ?? 0, privacy: .public) to \(id ?? 0, privacy: .public)")
@@ -174,7 +185,31 @@ final class BarManager: NSObject {
         }
     }
 
+    /// The Dock moves to a display when the pointer pushes against that display's Dock edge, so
+    /// while that happens, look for it four times a second for two seconds.
+    private func watchForDockMove() {
+        dockWatchTicks = 0
+        guard dockWatchTimer == nil else { return }
+        appLog.debug("The pointer is at a Dock edge; watching for the Dock to move")
+        dockWatchTimer = repeatingTimer(0.25, #selector(dockWatchTick(_:)))
+    }
+
+    @objc private func dockWatchTick(_ timer: Timer) {
+        checkDockDisplay()
+        dockWatchTicks += 1
+        if dockWatchTicks >= 8 {
+            timer.invalidate()
+            dockWatchTimer = nil
+        }
+    }
+
     @objc private func prefsTick(_ timer: Timer) {
+        // Anything that moved the Dock without the pointer pushing an edge is caught here.
+        checkDockDisplay()
+        refreshPrefs(force: false)
+    }
+
+    private func refreshPrefs(force: Bool) {
         // Every 5 minutes, re-check every running app in case a change came without a notification.
         ticks += 1
         if ticks % 150 == 0 {
@@ -185,7 +220,7 @@ final class BarManager: NSObject {
         // rewritten, or every 20 s in case a change hasn't reached the disk yet.
         var info = stat()
         let modified = stat(Self.dockPlist, &info) == 0 ? info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec : 0
-        guard modified != plistModified || ticks % 10 == 0 else {
+        guard force || modified != plistModified || ticks % 10 == 0 else {
             rebuildTiles()
             return
         }
@@ -205,6 +240,7 @@ final class BarManager: NSObject {
                 configure(bar)
                 bar.hideModeChanged()
             }
+            updateWindowKeeper()
         }
     }
 
@@ -212,12 +248,13 @@ final class BarManager: NSObject {
         refreshDisplays()
         dockDisplay = findDockDisplay()
         rebuildBars()
+        updateActivity()
     }
 
     // MARK: Settings
 
     func hideModeChanged() {
-        updateCoverPolling()
+        updateActivity()
         for bar in bars.values { bar.hideModeChanged() }
     }
 
@@ -226,20 +263,24 @@ final class BarManager: NSObject {
             configure(bar)
             bar.updateVisibility(.fade)
         }
+        updateActivity()
     }
 
-    /// Starts or stops moving windows out from under the bars, following the setting and the permission.
+    /// Starts or stops moving windows out from under the bars: only while some bar stays on screen,
+    /// and with the setting and the permission.
     func updateWindowKeeper() {
-        if Settings.shared.keepWindowsClear && Permissions.accessibilityAPIReady {
+        let mode = Settings.shared.hideMode
+        let barsStay = mode == .never || (mode == .sameAsDock && !prefs.autohide)
+        if Settings.shared.keepWindowsClear && Permissions.accessibilityAPIReady && barsCanShow && barsStay {
             windowKeeper.start(watching: running.apps)
         } else {
             windowKeeper.stop()
         }
     }
 
-    /// Only "Hide When a Window Covers It" needs the window list.
+    /// Only "Hide When a Window Covers It" needs the window list, and only while a bar can show.
     private func updateCoverPolling() {
-        if Settings.shared.hideMode == .whenCovered {
+        if Settings.shared.hideMode == .whenCovered && barsCanShow {
             if coverTimer == nil { coverTimer = repeatingTimer(0.5, #selector(coverTick(_:))) }
             checkCovered()
         } else {
@@ -281,9 +322,42 @@ final class BarManager: NSObject {
 
     // MARK: Pointer and apps
 
+    /// The pointer is over a bar or an edge sensor (or a poll asked): let every bar update.
     func pointerMoved() {
         let point = NSEvent.mouseLocation
         for bar in bars.values { bar.pointerMoved(to: point) }
+        if isPushingDockEdge(point) { watchForDockMove() }
+        updatePointerPolling()
+    }
+
+    /// The pointer is on the Dock's edge of a display that doesn't have the Dock.
+    private func isPushingDockEdge(_ point: NSPoint) -> Bool {
+        for (screen, id) in displays where id != dockDisplay {
+            let f = screen.frame
+            guard point.x >= f.minX, point.x <= f.maxX, point.y >= f.minY, point.y <= f.maxY else { continue }
+            switch prefs.orientation {
+            case .bottom: return point.y <= f.minY + 1
+            case .left: return point.x <= f.minX + 1
+            case .right: return point.x >= f.maxX - 1
+            }
+        }
+        return false
+    }
+
+    /// Polls the pointer twenty times a second, but only while a bar needs it (see
+    /// `BarController.needsPointerPolling`); at all other times nothing runs.
+    func updatePointerPolling() {
+        let needed = bars.values.contains { $0.needsPointerPolling }
+        if needed && pointerTimer == nil {
+            pointerTimer = repeatingTimer(1.0 / 20.0, #selector(pointerTick(_:)))
+        } else if !needed, let timer = pointerTimer {
+            timer.invalidate()
+            pointerTimer = nil
+        }
+    }
+
+    @objc private func pointerTick(_ timer: Timer) {
+        pointerMoved()
     }
 
     private func app(in note: Notification) -> NSRunningApplication? {

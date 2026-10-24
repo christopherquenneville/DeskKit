@@ -32,7 +32,7 @@ struct DockPrefs: Equatable {
     var animateLaunch = true
     var trashFull = false
 
-    static let domain = "com.apple.dock" as CFString
+    static var domain: CFString { "com.apple.dock" as CFString }
 
     static func read() -> DockPrefs {
         // The Dock posts nothing when its preferences change, so callers poll this.

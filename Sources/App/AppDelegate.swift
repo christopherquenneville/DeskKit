@@ -50,10 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         hasAccessibility = Permissions.accessibility
         updateTools()
-        let timer = Timer(timeInterval: 2, target: self, selector: #selector(checkPermissions(_:)), userInfo: nil, repeats: true)
-        timer.tolerance = 0.5
-        RunLoop.main.add(timer, forMode: .common)
-        permissionTimer = timer
+        schedulePermissionCheck()
         askForPermissionsIfNeeded()
         updater.start()
     }
@@ -102,7 +99,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Permissions
 
+    /// Checks every 2 s while Accessibility is wanted but missing, to start the tools as soon as it's
+    /// allowed, and once a minute otherwise, to notice it being taken away.
+    private func schedulePermissionCheck() {
+        permissionTimer?.invalidate()
+        let waiting = (wantsAccessibility && !hasAccessibility) || (hasAccessibility && !Permissions.accessibilityAPIReady)
+        let timer = Timer(timeInterval: waiting ? 2 : 60, target: self, selector: #selector(checkPermissions(_:)),
+                          userInfo: nil, repeats: false)
+        timer.tolerance = waiting ? 0.5 : 10
+        RunLoop.main.add(timer, forMode: .common)
+        permissionTimer = timer
+    }
+
     @objc private func checkPermissions(_ timer: Timer) {
+        defer { schedulePermissionCheck() }
         let allowed = Permissions.accessibility
         if allowed && !Permissions.accessibilityAPIReady && Settings.shared.restartedForAccessibilityInBuild != Permissions.buildIdentity {
             // Access was just allowed, but this process's Accessibility API can stay shut until it starts again.
@@ -302,10 +312,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func turnedOnTool(_ on: Bool) {
         updateTools()
         if on && !hasAccessibility { Permissions.requestAccessibility() }
+        schedulePermissionCheck()
     }
 
     @objc private func allowAccessibility(_ sender: NSMenuItem) {
         Permissions.requestAccessibility()
+        schedulePermissionCheck()
     }
 
     @objc private func allowScreenRecording(_ sender: NSMenuItem) {

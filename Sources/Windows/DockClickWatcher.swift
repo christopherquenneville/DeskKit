@@ -12,8 +12,10 @@ final class DockClickWatcher: NSObject {
     var onClick: ((NSRunningApplication, [AppWindow], NSRect, DockOrientation) -> Bool)?
 
     private(set) var isRunning = false
-    private var tap: CFMachPort?
-    private var source: CFRunLoopSource?
+    private var clickTap: CFMachPort?
+    /// Drags are only watched while a click is held back, so dragging anything else costs nothing.
+    private var dragTap: CFMachPort?
+    private var sources: [CFRunLoopSource] = []
     private var held: Held?
     private var holdTimer: Timer?
     private var geometry: (orientation: DockOrientation, reach: CGFloat) = (.bottom, 0)
@@ -35,16 +37,13 @@ final class DockClickWatcher: NSObject {
     @discardableResult
     func start() -> Bool {
         if isRunning { return true }
-        let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
-            | (1 << CGEventType.leftMouseDragged.rawValue)
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                          eventsOfInterest: CGEventMask(mask), callback: dockClickCallback,
-                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        self.tap = tap
-        self.source = source
+        guard let clickTap = makeTap([.leftMouseDown, .leftMouseUp]), let dragTap = makeTap([.leftMouseDragged]) else {
+            removeTaps()
+            return false
+        }
+        CGEvent.tapEnable(tap: clickTap, enable: true)
+        self.clickTap = clickTap
+        self.dragTap = dragTap
         isRunning = true
         appLog.info("Watching clicks on the Dock")
         return true
@@ -52,53 +51,76 @@ final class DockClickWatcher: NSObject {
 
     func stop() {
         guard isRunning else { return }
-        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
-        if let tap { CFMachPortInvalidate(tap) }
-        source = nil
-        tap = nil
         release()
+        removeTaps()
         isRunning = false
     }
 
-    fileprivate func reenable() {
-        if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+    /// A tap at the head of the session, added to the main run loop but not yet enabled.
+    private func makeTap(_ types: [CGEventType]) -> CFMachPort? {
+        let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                          eventsOfInterest: mask, callback: dockClickCallback,
+                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return nil }
+        CGEvent.tapEnable(tap: tap, enable: false)
+        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            return nil
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        sources.append(source)
+        return tap
     }
 
-    /// Returns the event to let it through, or nil to hold it back.
-    fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> CGEvent? {
-        if event.getIntegerValueField(.eventSourceUserData) == Self.replayMarker { return event }
+    private func removeTaps() {
+        for source in sources { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        for tap in [clickTap, dragTap].compactMap({ $0 }) { CFMachPortInvalidate(tap) }
+        sources = []
+        clickTap = nil
+        dragTap = nil
+    }
+
+    fileprivate func reenable() {
+        if let clickTap { CGEvent.tapEnable(tap: clickTap, enable: true) }
+        if held != nil, let dragTap { CGEvent.tapEnable(tap: dragTap, enable: true) }
+    }
+
+    /// Returns whether to let the event through (false holds it back).
+    fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        if event.getIntegerValueField(.eventSourceUserData) == Self.replayMarker { return true }
         switch type {
         case .leftMouseDown:
             release()
             guard event.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty,
-                  let item = dockItem(at: event.location) else { return event }
+                  let item = dockItem(at: event.location) else { return true }
             let windows = WindowList.windows(of: item.app.processIdentifier)
-            guard windows.count >= 2 else { return event }
+            guard windows.count >= 2 else { return true }
             held = Held(down: event.copy() ?? event, app: item.app, windows: windows, frame: item.frame,
                         orientation: item.orientation)
+            if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: true) }
             let timer = Timer(timeInterval: Self.pressAndHold, target: self, selector: #selector(heldDown(_:)),
                               userInfo: nil, repeats: false)
             RunLoop.main.add(timer, forMode: .common)
             holdTimer = timer
-            return nil
+            return false
         case .leftMouseDragged:
-            guard let held else { return event }
+            guard let held else { return true }
             let start = held.down.location, now = event.location
-            guard hypot(now.x - start.x, now.y - start.y) > 4 else { return nil }
+            guard hypot(now.x - start.x, now.y - start.y) > 4 else { return false }
             // It's a drag (to rearrange or remove the icon): give the Dock the press, then this move.
             release()
             replay(held.down)
             replay(event)
-            return nil
+            return false
         case .leftMouseUp:
-            guard let held else { return event }
+            guard let held else { return true }
             release()
-            if let onClick, onClick(held.app, held.windows, screenRect(held.frame), held.orientation) { return nil }
+            if let onClick, onClick(held.app, held.windows, screenRect(held.frame), held.orientation) { return false }
             replay(held.down)
             replay(event)
-            return nil
+            return false
         default:
-            return event
+            return true
         }
     }
 
@@ -113,6 +135,7 @@ final class DockClickWatcher: NSObject {
         held = nil
         holdTimer?.invalidate()
         holdTimer = nil
+        if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: false) }
     }
 
     private func replay(_ event: CGEvent) {
@@ -186,12 +209,13 @@ final class DockClickWatcher: NSObject {
 private func dockClickCallback(_ proxy: CGEventTapProxy, _ type: CGEventType, _ event: CGEvent,
                                _ refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
     guard let refcon else { return Unmanaged.passUnretained(event) }
-    return MainActor.assumeIsolated {
+    let pass = MainActor.assumeIsolated {
         let watcher = Unmanaged<DockClickWatcher>.fromOpaque(refcon).takeUnretainedValue()
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             watcher.reenable()
-            return Unmanaged.passUnretained(event)
+            return true
         }
-        return watcher.handle(type, event).map { Unmanaged.passUnretained($0) }
+        return watcher.handle(type, event)
     }
+    return pass ? Unmanaged.passUnretained(event) : nil
 }

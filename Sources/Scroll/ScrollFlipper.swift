@@ -21,8 +21,8 @@ final class ScrollFlipper: NSObject {
         workspace.addObserver(self, selector: #selector(rebuild(_:)), name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(rebuild(_:)),
                                                             name: Notification.Name("com.apple.screenIsUnlocked"), object: nil)
-        let timer = Timer(timeInterval: 2, target: self, selector: #selector(check(_:)), userInfo: nil, repeats: true)
-        timer.tolerance = 0.5
+        let timer = Timer(timeInterval: 10, target: self, selector: #selector(check(_:)), userInfo: nil, repeats: true)
+        timer.tolerance = 2
         RunLoop.main.add(timer, forMode: .common)
         watchdog = timer
         appLog.info("Reversing mouse wheels")

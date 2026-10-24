@@ -22,6 +22,7 @@ final class BarController: NSObject {
     let panel: BarPanel
     let view: BarView
     private let background: BarBackground
+    private let sensor = EdgeSensor()
     private var prefs = DockPrefs()
 
     var isDockDisplay = false
@@ -66,6 +67,7 @@ final class BarController: NSObject {
         content.addSubview(view)
         panel.contentView = content
         view.controller = self
+        sensor.onPointer = { [unowned manager = self.manager] in manager.pointerMoved() }
     }
 
     func close() {
@@ -73,8 +75,30 @@ final class BarController: NSObject {
         revealTimer?.invalidate()
         lingerTimer?.invalidate()
         manager.label.hide(owner: displayID)
+        sensor.close()
         panel.orderOut(nil)
         panel.close()
+    }
+
+    /// While the bar is hovered, or revealed and about to hide again, the manager polls the pointer
+    /// lightly, so leaving the bar is noticed even when no event says so. A hidden bar beside the
+    /// Dock polls too: a sensor there could keep the Dock itself from appearing.
+    var needsPointerPolling: Bool {
+        view.isHovering || view.isPressing || (autoHides && revealed) || (autoHides && isDockDisplay && alphaTarget == 0)
+    }
+
+    /// The edge sensor stands in for a hidden bar on a display without the Dock.
+    private func updateSensor() {
+        guard autoHides && !isDockDisplay && alphaTarget == 0 else {
+            sensor.hide()
+            return
+        }
+        let f = screen.frame
+        switch prefs.orientation {
+        case .bottom: sensor.show(along: NSRect(x: f.minX, y: f.minY, width: f.width, height: 1))
+        case .left: sensor.show(along: NSRect(x: f.minX, y: f.minY, width: 1, height: f.height))
+        case .right: sensor.show(along: NSRect(x: f.maxX - 1, y: f.minY, width: 1, height: f.height))
+        }
     }
 
     // MARK: Placement
@@ -128,6 +152,7 @@ final class BarController: NSObject {
         view.configure(tiles: tiles, icons: icons, metrics: metrics, orientation: orientation, maxScale: maxScale,
                        center: barCenter, visibleRange: visibleRange, prefs: prefs)
         applySlide()
+        updateSensor()
     }
 
     /// The resting bar in screen coordinates.
@@ -197,6 +222,8 @@ final class BarController: NSObject {
             manager.label.hide(owner: displayID)
             if alpha == 0 { panel.orderOut(nil) }
         }
+        updateSensor()
+        manager.updatePointerPolling()
         startAnimating()
     }
 
@@ -270,10 +297,6 @@ final class BarController: NSObject {
         }
     }
 
-    func hoverChanged() {
-        updateLabel()
-    }
-
     func menuWillOpen() {
         manager.label.hide(owner: displayID)
         lingerTimer?.invalidate()
@@ -295,11 +318,13 @@ final class BarController: NSObject {
 
     // MARK: Animation
 
-    /// Runs a 60 Hz timer only while something is moving.
+    /// Runs a timer at the display's refresh rate (up to 120 Hz) only while something is moving or
+    /// the layout changed, so the bar is redrawn at most once per frame however fast the mouse reports.
     func startAnimating() {
         guard animationTimer == nil else { return }
         lastFrame = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 60.0, target: self, selector: #selector(animate(_:)), userInfo: nil, repeats: true)
+        let rate = Double(min(120, max(30, screen.maximumFramesPerSecond)))
+        let timer = Timer(timeInterval: 1 / rate, target: self, selector: #selector(animate(_:)), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         animationTimer = timer
     }
@@ -321,6 +346,8 @@ final class BarController: NSObject {
             applySlide()
             running = running || slide != slideTarget
         }
+        // Last, so this frame shows the magnification, slide and bounce worked out above.
+        if view.applyPendingLayout() { running = true }
         if !running {
             timer.invalidate()
             animationTimer = nil
