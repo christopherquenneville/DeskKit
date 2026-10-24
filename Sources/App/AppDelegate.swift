@@ -114,9 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             appLog.info("Accessibility access is \(allowed ? "on" : "off", privacy: .public)")
             updateTools()
         }
-        if allowed && Settings.shared.wantsScreenRecordingPrompt {
-            Settings.shared.wantsScreenRecordingPrompt = false
-            if Settings.shared.windowPickerEnabled && !Permissions.screenRecording { Permissions.requestScreenRecording() }
+        if allowed && Settings.shared.showScreenRecordingSettingsNext {
+            // Accessibility is done: move System Settings on to the other permission.
+            Settings.shared.showScreenRecordingSettingsNext = false
+            if Settings.shared.windowPickerEnabled && !Permissions.screenRecording { Permissions.openScreenRecordingSettings() }
         }
     }
 
@@ -135,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 + "DeskKit needs to be turned on in System Settings › Privacy & Security › \(Permissions.accessibilityName). "
                 + "Its Docks work without it."
             if needsScreenRecording {
-                alert.informativeText += "\n\nAfterwards, DeskKit asks for \(Permissions.screenRecordingName) too, so the window picker can show previews of your windows."
+                alert.informativeText += "\n\nTurn it on under \(Permissions.screenRecordingName) too, so the window picker can show previews of your windows."
             }
         } else {
             alert.messageText = "Show window previews?"
@@ -145,11 +146,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Not Now")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // macOS's own prompts for both at once; Settings opens at the first and moves on to the second
+        // once Accessibility is on.
         if needsAccessibility {
-            settings.wantsScreenRecordingPrompt = needsScreenRecording
+            if needsScreenRecording { Permissions.requestScreenRecording(thenOpenSettings: false) }
+            settings.showScreenRecordingSettingsNext = needsScreenRecording
             Permissions.requestAccessibility()
         } else {
-            Permissions.requestScreenRecording()
+            Permissions.requestScreenRecording(thenOpenSettings: true)
         }
     }
 
@@ -302,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func allowScreenRecording(_ sender: NSMenuItem) {
-        Permissions.requestScreenRecording()
+        Permissions.requestScreenRecording(thenOpenSettings: true)
     }
 
     @objc private func restart(_ sender: NSMenuItem) {

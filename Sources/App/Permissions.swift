@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ScreenCaptureKit
 
 /// The two permissions DeskKit can use, and honest ways to check them.
 @MainActor
@@ -30,13 +31,28 @@ enum Permissions {
     static var accessibilityName: String { atLeast(27) ? "Device Control and Data Access" : "Accessibility" }
     static var screenRecordingName: String { atLeast(15) ? "Screen & System Audio Recording" : "Screen Recording" }
 
+    /// Shows macOS's prompt, which also lists DeskKit under Accessibility, and opens that list.
     static func requestAccessibility() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         if !AXIsProcessTrustedWithOptions(options) { openSettings("Privacy_Accessibility") }
     }
 
-    static func requestScreenRecording() {
-        if !CGRequestScreenCaptureAccess() { openSettings("Privacy_ScreenCapture") }
+    /// Shows macOS's prompt, which also lists DeskKit under Screen Recording, and opens that list if
+    /// asked. On current macOS only a ScreenCaptureKit request adds DeskKit to the list; the older
+    /// call does it on macOS 12 and 13.
+    static func requestScreenRecording(thenOpenSettings open: Bool) {
+        if #available(macOS 14, *) {
+            SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { _, _ in
+                if open { Task { @MainActor in openScreenRecordingSettings() } }
+            }
+        } else {
+            _ = CGRequestScreenCaptureAccess()
+            if open { openScreenRecordingSettings() }
+        }
+    }
+
+    static func openScreenRecordingSettings() {
+        openSettings("Privacy_ScreenCapture")
     }
 
     private static func openSettings(_ anchor: String) {

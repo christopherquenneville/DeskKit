@@ -86,11 +86,11 @@ final class Settings {
         set { defaults.set(newValue, forKey: "AskedForPermissionsInBuild") }
     }
 
-    /// Screen Recording is asked for once Accessibility is allowed (two system prompts at once
-    /// confuse), which can be after a restart.
-    var wantsScreenRecordingPrompt: Bool {
-        get { defaults.bool(forKey: "WantsScreenRecordingPrompt") }
-        set { defaults.set(newValue, forKey: "WantsScreenRecordingPrompt") }
+    /// Both permissions were asked for at once: once Accessibility is allowed (which can be after a
+    /// restart), System Settings moves on to Screen Recording.
+    var showScreenRecordingSettingsNext: Bool {
+        get { defaults.bool(forKey: "ShowScreenRecordingSettingsNext") }
+        set { defaults.set(newValue, forKey: "ShowScreenRecordingSettingsNext") }
     }
 
     /// The build that last restarted itself so a new Accessibility grant took effect, so it never

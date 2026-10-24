@@ -14,8 +14,8 @@ cd "$(dirname "$0")"
 
 NAME=DeskKit
 BUNDLE_ID=tech.quenneville.DeskKit
-VERSION=1.0
-BUILD_NUMBER=1
+VERSION=1.0.1
+BUILD_NUMBER=2
 BUILD=build
 APP="$BUILD/$NAME.app"
 
