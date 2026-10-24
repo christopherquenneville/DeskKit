@@ -2,10 +2,15 @@
 # Builds DeskKit, has Apple notarize it, and packs build/DeskKit.zip for a GitHub release.
 #
 # One-time setup:
-#   1. A "Developer ID Application" certificate in your keychain (developer.apple.com, Certificates).
-#   2. notarytool credentials saved in your keychain under the profile name "DeskKit":
+#   1. A "Developer ID Application" certificate with its private key in your keychain
+#      (developer.apple.com, Certificates; or import a .p12 exported from another Mac).
+#   2. Without Xcode, Apple's "Developer ID - G2" intermediate certificate too, or codesign can't
+#      build the chain (apple.com/certificateauthority, DeveloperIDG2CA.cer).
+#   3. notarytool credentials saved in your keychain under the profile name "DeskKit", either an
+#      App Store Connect API key:
+#        xcrun notarytool store-credentials DeskKit --key AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer ID>
+#      or your Apple ID with an app-specific password (made at account.apple.com):
 #        xcrun notarytool store-credentials DeskKit --apple-id <your Apple ID> --team-id <your team ID>
-#      It asks for an app-specific password, which you make at account.apple.com.
 # Set DESKKIT_NOTARY_PROFILE to use another profile name.
 set -euo pipefail
 cd "$(dirname "$0")"
