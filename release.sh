@@ -20,7 +20,8 @@ APP=build/DeskKit.app
 UPLOAD=build/DeskKit-notarize.zip
 
 ./build.sh --no-install
-if ! codesign -dvv "$APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then
+# grep without -q reads to the end, so codesign isn't cut off mid-write (pipefail would count that).
+if ! codesign -dvv "$APP" 2>&1 | grep "^Authority=Developer ID Application" >/dev/null; then
     echo "DeskKit wasn't signed with a Developer ID Application certificate, so Apple won't notarize it." >&2
     exit 1
 fi
