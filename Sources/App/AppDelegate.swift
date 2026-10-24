@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         var access: [NSMenuItem] = []
         if wantsAccessibility && !hasAccessibility {
-            access.append(item("Allow \(Permissions.accessibilityName) Access…", #selector(allowAccessibility(_:))))
+            access.append(item("Allow DeskKit in \(Permissions.accessibilityName)…", #selector(allowAccessibility(_:))))
         } else if hasAccessibility && !Permissions.accessibilityAPIReady {
             access.append(item("Restart DeskKit to Finish Allowing Access", #selector(restart(_:))))
         }
