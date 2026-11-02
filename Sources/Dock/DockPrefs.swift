@@ -31,20 +31,29 @@ struct DockPrefs: Equatable {
     var dimHiddenApps = false
     var animateLaunch = true
     var trashFull = false
+    /// The Dock's count of its own changes; a new count is worth a full read.
+    var modCount = 0
 
     static var domain: CFString { "com.apple.dock" as CFString }
 
     static func read() -> DockPrefs {
+        var prefs = readSettings()
+        prefs.apps = items(value("persistent-apps"), inAppsSection: true)
+        prefs.others = items(value("persistent-others"), inAppsSection: false)
+        prefs.recents = items(value("recent-apps"), inAppsSection: true)
+        return prefs
+    }
+
+    /// Everything but the Dock's items, which are the costly part to read. Cheap enough to check every
+    /// couple of seconds, which matters because the Dock's own changes can take 15 seconds to reach
+    /// its plist on disk.
+    static func readSettings() -> DockPrefs {
         // The Dock posts nothing when its preferences change, so callers poll this.
         CFPreferencesAppSynchronize(domain)
-        func value(_ key: String) -> Any? { CFPreferencesCopyAppValue(key as CFString, domain) }
         func number(_ key: String) -> Double? { (value(key) as? NSNumber)?.doubleValue }
         func flag(_ key: String) -> Bool? { (value(key) as? NSNumber)?.boolValue }
 
         var prefs = DockPrefs()
-        prefs.apps = items(value("persistent-apps"), inAppsSection: true)
-        prefs.others = items(value("persistent-others"), inAppsSection: false)
-        prefs.recents = items(value("recent-apps"), inAppsSection: true)
         if let size = number("tilesize") { prefs.tileSize = CGFloat(min(max(size, 16), 128)) }
         prefs.magnification = flag("magnification") ?? false
         if let size = number("largesize") { prefs.largeSize = CGFloat(min(max(size, 16), 128)) }
@@ -58,8 +67,20 @@ struct DockPrefs: Equatable {
         prefs.dimHiddenApps = flag("showhidden") ?? false
         prefs.animateLaunch = flag("launchanim") ?? true
         prefs.trashFull = flag("trash-full") ?? false
+        prefs.modCount = Int(number("mod-count") ?? 0)
         return prefs
     }
+
+    /// These settings with `other`'s items, for comparing settings alone.
+    func withItems(of other: DockPrefs) -> DockPrefs {
+        var prefs = self
+        prefs.apps = other.apps
+        prefs.others = other.others
+        prefs.recents = other.recents
+        return prefs
+    }
+
+    private static func value(_ key: String) -> Any? { CFPreferencesCopyAppValue(key as CFString, domain) }
 
     private static func items(_ raw: Any?, inAppsSection: Bool) -> [DockItem] {
         guard let entries = raw as? [[String: Any]] else { return [] }

@@ -8,6 +8,12 @@ extension NSScreen {
         (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
     }
 
+    /// The display's UUID, which is how the window server's Spaces list names it.
+    var displayUUID: String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
     /// The visible frame without the menu bar, even where AppKit leaves it in: macOS can show a menu
     /// bar on a display whose visibleFrame doesn't account for it (zoomed windows still stop below it).
     /// Asks the window server, so call it when screens change rather than all the time.

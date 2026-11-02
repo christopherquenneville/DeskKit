@@ -22,10 +22,11 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
   a third of a second, fades out the copy where the Dock landed and fades one in where it left.
   Displays you plug in or unplug get or lose a copy straight away.
 - **Mirrors your Dock's settings**: pinned apps, running apps, folders, files, web links, spacers and
-  the Trash, in the Dock's order; icon size (shrinking when the Dock doesn't fit a display, as the Dock
-  does); position (bottom, left or right); magnification and its size; running-app dots; badges such as
-  unread counts; *Show suggested and recent apps*; *Show only open apps*; dimmed hidden apps; launch
-  animations. Change something in the Dock and the copies follow within two seconds.
+  the Trash, in the Dock's order; icon size (shrinking as far as the Dock does when it doesn't fit its
+  display); position (bottom, left or right); magnification and its size; running-app dots; badges such
+  as unread counts; *Show suggested and recent apps*; *Show only open apps*; dimmed hidden apps; launch
+  animations. Change something in the Dock and the copies follow within two seconds, and a resized
+  Dock straight away.
 - **Works like the Dock**: click to open an app or bring it forward (it reopens a window if it has
   none), open folders, files and the Trash; right-click or Control-click for Hide/Show, Show in
   Finder and Quit (hold Option for Force Quit); drop files on an app to open them with it, or on the
@@ -38,7 +39,8 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
   - *Hide When a Window Covers It*: makes room for windows underneath.
   - *Always Hide*.
 
-  A hidden copy slides back in when the pointer touches that display's Dock edge.
+  A hidden copy slides back in when the pointer touches that display's Dock edge. Whatever the
+  setting, a display showing a full-screen app has no copy, as it has no Dock.
 - **Keeps windows clear of the copies.** On the display with the real Dock, a zoomed window stops at
   the Dock. DeskKit does the same beside its copies: a window that's zoomed, filled, tiled or opened
   against one is moved to start beside it, and zooming it again still restores its old size. A window
@@ -137,18 +139,22 @@ explains the one-time setup it needs).
 ## How it works
 
 - **Reading the Dock.** DeskKit reads `com.apple.dock` (the same preferences the Dock keeps) and
-  never writes to it: pinning, removing and resizing stay the real Dock's job.
+  never writes to it: pinning, removing and resizing stay the real Dock's job. The size the Dock
+  actually shows comes from the strip it reserves on its display (when it doesn't hide), since a Dock
+  too full for its display shrinks its icons without saving that anywhere.
 - **Finding the Dock's display.** The display whose visible area is inset on the Dock's edge is the
   one the Dock is on. An auto-hiding Dock leaves no inset, so DeskKit then assumes the main display.
 - **Badges** come from LaunchServices. That's private API, looked up at run time; if a future macOS
   removes it, the copies simply show no badges.
-- **Each copy** is a non-activating panel at the Dock's window level, sized tightly around it and kept
-  out of full-screen apps like the Dock is. Clicks pass through its transparent parts. Its icons are
+- **Each copy** is a non-activating panel at the Dock's window level, sized tightly around it, and
+  hidden on a display showing a full-screen app (the window server's Spaces list says which; private
+  API, looked up at run time). Clicks pass through its transparent parts. Its icons are
   Core Animation layers showing bitmaps made once, so magnifying only moves and resizes them.
 - **Staying light.** DeskKit never watches the pointer across the whole screen. A copy hears about it
   only while the pointer is over it (or over a one-point sensor along the edge while the copy is
-  hidden). The Dock's display is checked again when the pointer pushes against a display's Dock edge,
-  which is how the Dock moves, and every 2 seconds besides. With a single display, where no copy can
+  hidden). The Dock's display and settings are checked again when the pointer pushes against a
+  display's Dock edge, which is how the Dock moves, when a display's usable area changes, which is how
+  a resized Dock shows, and every 2 seconds besides. With a single display, where no copy can
   show, DeskKit stops following the Dock and other apps' windows altogether.
 - **Keeping windows clear.** DeskKit watches windows being created, moved and resized through the
   Accessibility API, and once a zoom or tile has settled it pulls the window's edge out of the strip

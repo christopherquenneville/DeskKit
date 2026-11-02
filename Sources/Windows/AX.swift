@@ -99,4 +99,25 @@ enum Spaces {
         }
         return result
     }
+
+    private typealias CopyManagedDisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
+    private static let copyManagedDisplaySpaces: CopyManagedDisplaySpaces? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSCopyManagedDisplaySpaces") else { return nil }
+        return unsafeBitCast(symbol, to: CopyManagedDisplaySpaces.self)
+    }()
+
+    /// The displays showing a full-screen app's Space right now (type 4), by UUID, or "Main" when
+    /// displays don't have separate Spaces. Empty if the private API is gone.
+    static func fullScreenDisplays() -> Set<String> {
+        guard let (mainConnection, _) = functions, let copy = copyManagedDisplaySpaces,
+              let displays = copy(mainConnection())?.takeRetainedValue() as? [[String: Any]] else { return [] }
+        var result = Set<String>()
+        for display in displays {
+            guard let id = display["Display Identifier"] as? String,
+                  let current = display["Current Space"] as? [String: Any],
+                  (current["type"] as? NSNumber)?.intValue == 4 else { continue }
+            result.insert(id)
+        }
+        return result
+    }
 }

@@ -50,6 +50,23 @@ MainActor.assumeIsolated {
     check("the download is the release's DeskKit.zip", release?.download.lastPathComponent == "DeskKit.zip" && release?.download.host == "github.com")
     check("release notes lose their Markdown marks", Updater.plainText(release?.notes ?? "") == "Faster previews")
 
+    // MARK: Following the Dock's settings
+
+    var pinned = DockPrefs()
+    pinned.apps = [DockItem(kind: .app, label: "Mail")]
+    var resized = DockPrefs()
+    resized.tileSize = 64
+    check("settings alone compare equal whatever the items", DockPrefs().withItems(of: pinned) == pinned)
+    check("a new Dock size shows in the settings alone", resized.withItems(of: pinned) != pinned)
+    check("the Dock's settings read without its items", DockPrefs.readSettings().apps.isEmpty)
+
+    // Measured on macOS 27: a left Dock at 44 pt reserves 64 pt of its display.
+    check("a Dock reserving 64 pt has 44 pt tiles", abs(BarMetrics.tile(reserving: 64) - 44) < 0.5)
+    check("every Dock size is read back from the whole points it reserves", stride(from: 16.0, through: 128, by: 0.5).allSatisfy { size in
+        let reserved = (BarMetrics.edgeMargin + BarMetrics(tile: CGFloat(size)).thickness).rounded(.down)
+        return abs(BarMetrics.tile(reserving: reserved) - CGFloat(size)) < 0.5
+    })
+
     // MARK: Magnification on a Dock that fills its screen
 
     // A left Dock on a 900 pt screen with a 30 pt menu bar, full enough that magnifying it can't fit.

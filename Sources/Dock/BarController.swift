@@ -27,6 +27,8 @@ final class BarController: NSObject {
 
     var isDockDisplay = false
     var covered = false
+    /// The display is showing a full-screen app, where the Dock doesn't show either.
+    var fullScreen = false
     private var revealed = false
     private var revealTimer: Timer?
     private var lingerTimer: Timer?
@@ -53,7 +55,8 @@ final class BarController: NSObject {
         panel.backgroundColor = .clear
         panel.hasShadow = background.wantsWindowShadow
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)))
-        // No .fullScreenAuxiliary: like the Dock, bars stay out of full-screen apps.
+        // No .fullScreenAuxiliary, though macOS still shows this panel over full-screen apps; the
+        // manager hides it there (see `fullScreen`).
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
@@ -87,9 +90,10 @@ final class BarController: NSObject {
         view.isHovering || view.isPressing || (autoHides && revealed) || (autoHides && isDockDisplay && alphaTarget == 0)
     }
 
-    /// The edge sensor stands in for a hidden bar on a display without the Dock.
+    /// The edge sensor stands in for a hidden bar on a display without the Dock. Not over a full-screen
+    /// app, where it could keep the Dock itself from appearing at that edge.
     private func updateSensor() {
-        guard autoHides && !isDockDisplay && alphaTarget == 0 else {
+        guard autoHides && !isDockDisplay && alphaTarget == 0 && !fullScreen else {
             sensor.hide()
             return
         }
@@ -105,8 +109,9 @@ final class BarController: NSObject {
 
     private var showsOnDockDisplay: Bool { isDockDisplay && Settings.shared.showOnDockDisplay }
 
-    /// Sizes the panel tightly around the bar, plus room for magnified and bouncing icons.
-    func configure(screen: NSScreen, tiles: [Tile], icons: [String: NSImage], prefs: DockPrefs) {
+    /// Sizes the panel tightly around the bar, plus room for magnified and bouncing icons. `dockTile` is
+    /// the real Dock's tile size as it shows on its own display, when that can be measured.
+    func configure(screen: NSScreen, tiles: [Tile], icons: [String: NSImage], prefs: DockPrefs, dockTile: CGFloat?) {
         self.screen = screen
         self.prefs = prefs
         visibleFrame = screen.usableFrame
@@ -116,8 +121,11 @@ final class BarController: NSObject {
         let edges = showsOnDockDisplay ? visibleFrame : screen.frame
         let usable = vertical ? visibleFrame.height : visibleFrame.width
 
-        // Shrink the icons, as the Dock does, when the bar doesn't fit along the screen.
+        // The Dock's size as it shows, where that differs from its setting by more than measuring can
+        // miss: it has shrunk its icons to fit its display, or is being resized and hasn't saved yet.
         var tile = prefs.tileSize
+        if let dockTile, abs(dockTile - tile) >= 0.5 { tile = dockTile }
+        // Shrink the icons further, as the Dock does, when the bar doesn't fit along this screen.
         let lengthPerPoint = BarMetrics(tile: 1).length(of: tiles)
         if lengthPerPoint * tile > usable - 8 { tile = max(16, (usable - 8) / lengthPerPoint) }
         let metrics = BarMetrics(tile: tile)
@@ -192,6 +200,7 @@ final class BarController: NSObject {
 
     private var shouldShow: Bool {
         if isDockDisplay && !Settings.shared.showOnDockDisplay { return false }
+        if fullScreen { return false }
         switch effectiveHideMode {
         case .never, .sameAsDock: return true
         case .whenCovered: return !covered || revealed

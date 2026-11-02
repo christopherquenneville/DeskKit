@@ -22,9 +22,11 @@ final class BarManager: NSObject {
     private var pointerTimer: Timer?
     private var dockWatchTimer: Timer?
     private var dockWatchTicks = 0
+    private var fullScreenRecheck: Timer?
     private var openableCache: [String: Bool] = [:]
     private var ticks = 0
     private var displays: [(screen: NSScreen, id: CGDirectDisplayID)] = []
+    private var displayUUIDs: [CGDirectDisplayID: String] = [:]
     private var plistModified = 0
     private static let dockPlist = NSHomeDirectory() + "/Library/Preferences/com.apple.dock.plist"
     private let running = RunningApps()
@@ -41,11 +43,12 @@ final class BarManager: NSObject {
 
     /// Takes every bar down and stops watching, for when the tool is turned off.
     func stop() {
-        for timer in [prefsTimer, coverTimer, pointerTimer, dockWatchTimer] { timer?.invalidate() }
+        for timer in [prefsTimer, coverTimer, pointerTimer, dockWatchTimer, fullScreenRecheck] { timer?.invalidate() }
         prefsTimer = nil
         coverTimer = nil
         pointerTimer = nil
         dockWatchTimer = nil
+        fullScreenRecheck = nil
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         windowKeeper.stop()
@@ -59,12 +62,14 @@ final class BarManager: NSObject {
         dockDisplay = findDockDisplay()
         rebuildTiles(force: true)
         rebuildBars()
+        checkFullScreen()
         windowKeeper.strips = { [unowned self] in self.bars.values.compactMap(\.keepClearStrip) }
         updateActivity()
 
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(self, selector: #selector(spaceChanged(_:)), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         workspace.addObserver(self, selector: #selector(appWillLaunch(_:)), name: NSWorkspace.willLaunchApplicationNotification, object: nil)
         workspace.addObserver(self, selector: #selector(appDidLaunch(_:)), name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         // Apps usually change between regular and background as they activate or deactivate.
@@ -118,6 +123,8 @@ final class BarManager: NSObject {
     /// dictionary each time, and the Dock check runs often while the pointer pushes an edge).
     private func refreshDisplays() {
         displays = NSScreen.screens.map { ($0, $0.displayID) }
+        displayUUIDs = Dictionary(displays.compactMap { display in display.screen.displayUUID.map { (display.id, $0) } },
+                                  uniquingKeysWith: { first, _ in first })
     }
 
     private func screen(for id: CGDirectDisplayID) -> NSScreen? {
@@ -125,7 +132,28 @@ final class BarManager: NSObject {
     }
 
     private func configure(_ bar: BarController) {
-        bar.configure(screen: screen(for: bar.displayID) ?? bar.screen, tiles: tiles, icons: icons, prefs: prefs)
+        bar.configure(screen: screen(for: bar.displayID) ?? bar.screen, tiles: tiles, icons: icons, prefs: prefs,
+                      dockTile: measuredDockTile)
+    }
+
+    /// How deep a strip the Dock reserves along its edge of `screen` (none where it isn't, or hides).
+    private func reservedDepth(of screen: NSScreen) -> CGFloat {
+        let frame = screen.frame, visible = screen.visibleFrame
+        switch prefs.orientation {
+        case .bottom: return visible.minY - frame.minY
+        case .left: return visible.minX - frame.minX
+        case .right: return frame.maxX - visible.maxX
+        }
+    }
+
+    /// The real Dock's tile size as it shows right now, read from the strip it reserves on its display.
+    /// That differs from its setting when it has shrunk its icons to fit (by its own rule, which stops
+    /// shorter than the bars' estimate), and while it's being resized. Nil when it hides, or a full-screen
+    /// app covers its display: there's no strip then.
+    private var measuredDockTile: CGFloat? {
+        guard !prefs.autohide, let dockDisplay, let screen = screen(for: dockDisplay) else { return nil }
+        let tile = BarMetrics.tile(reserving: reservedDepth(of: screen))
+        return tile >= 16 ? tile : nil
     }
 
     private func rebuildBars() {
@@ -138,24 +166,18 @@ final class BarManager: NSObject {
             let bar = bars[id] ?? BarController(screen: screen, manager: self)
             bars[id] = bar
             bar.isDockDisplay = id == dockDisplay
-            bar.configure(screen: screen, tiles: tiles, icons: icons, prefs: prefs)
+            configure(bar)
             bar.updateVisibility(.fade)
             visibleFrames[id] = screen.visibleFrame
         }
-        appLog.info("Bars: \(self.bars.count, privacy: .public) displays, Dock on \(self.dockDisplay ?? 0, privacy: .public), \(self.tiles.count, privacy: .public) tiles")
+        appLog.info("Bars: \(self.bars.count, privacy: .public) displays, Dock on \(self.dockDisplay ?? 0, privacy: .public), \(self.tiles.count, privacy: .public) tiles, showing \(Double(self.measuredDockTile ?? 0), privacy: .public) pt")
     }
 
     /// The display whose visible frame is inset on the Dock's edge.
     private func findDockDisplay() -> CGDirectDisplayID? {
         var best: (id: CGDirectDisplayID, inset: CGFloat)?
         for (screen, id) in displays {
-            let frame = screen.frame, visible = screen.visibleFrame
-            let inset: CGFloat
-            switch prefs.orientation {
-            case .bottom: inset = visible.minY - frame.minY
-            case .left: inset = visible.minX - frame.minX
-            case .right: inset = frame.maxX - visible.maxX
-            }
+            let inset = reservedDepth(of: screen)
             if inset > 0.5 && inset > (best?.inset ?? 0) { best = (id, inset) }
         }
         if let best { return best.id }
@@ -178,24 +200,28 @@ final class BarManager: NSObject {
                 bar.updateVisibility(.fade)
             }
         }
-        // With "Also Show on the Dock's Display", that bar follows the Dock's size.
+        // A resized Dock changes its display's visible frame, and every bar follows the size it shows.
+        var resized = false
         for (screen, id) in displays where visibleFrames[id] != screen.visibleFrame {
             visibleFrames[id] = screen.visibleFrame
-            if let bar = bars[id] { configure(bar) }
+            resized = true
         }
+        if resized { bars.values.forEach(configure) }
     }
 
-    /// The Dock moves to a display when the pointer pushes against that display's Dock edge, so
-    /// while that happens, look for it four times a second for two seconds.
-    private func watchForDockMove() {
+    /// The Dock moves to a display when the pointer pushes against that display's Dock edge, and a
+    /// resized Dock changes its display's visible frame. Either way, look at where it is and how it's
+    /// set four times a second for two seconds, so the bars follow it straight away.
+    private func watchDock() {
         dockWatchTicks = 0
         guard dockWatchTimer == nil else { return }
-        appLog.debug("The pointer is at a Dock edge; watching for the Dock to move")
+        appLog.debug("Watching the Dock for a move or a new size")
         dockWatchTimer = repeatingTimer(0.25, #selector(dockWatchTick(_:)))
     }
 
     @objc private func dockWatchTick(_ timer: Timer) {
         checkDockDisplay()
+        refreshSettings()
         dockWatchTicks += 1
         if dockWatchTicks >= 8 {
             timer.invalidate()
@@ -207,6 +233,8 @@ final class BarManager: NSObject {
         // Anything that moved the Dock without the pointer pushing an edge is caught here.
         checkDockDisplay()
         refreshPrefs(force: false)
+        // A full-screen app that quits may take its Space away without a Space change being announced.
+        if bars.values.contains(where: \.fullScreen) { checkFullScreen() }
     }
 
     private func refreshPrefs(force: Bool) {
@@ -216,21 +244,38 @@ final class BarManager: NSObject {
             running.resync()
             running.apps.forEach { windowKeeper.watch($0.pid) }
         }
-        // Parsing the Dock's preferences is the costly part, so only do it when its plist has been
-        // rewritten, or every 20 s in case a change hasn't reached the disk yet.
+        // Parsing the Dock's items is the costly part, so only do it when its plist has been rewritten,
+        // when its settings (cheap to read) have changed, or every 20 s. The Dock's own changes can take
+        // 15 s to reach the disk, and a new size shouldn't wait that long.
         var info = stat()
         let modified = stat(Self.dockPlist, &info) == 0 ? info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec : 0
-        guard force || modified != plistModified || ticks % 10 == 0 else {
+        guard force || modified != plistModified || ticks % 10 == 0 || settingsChanged else {
             rebuildTiles()
             return
         }
         plistModified = modified
-        let new = DockPrefs.read()
+        apply(DockPrefs.read())
+    }
+
+    /// Whether the Dock's settings (not its items) differ from what the bars show. Cheap to check.
+    private var settingsChanged: Bool {
+        DockPrefs.readSettings().withItems(of: prefs) != prefs
+    }
+
+    /// Picks up a new Dock size, position or other setting straight away.
+    private func refreshSettings() {
+        if settingsChanged { apply(DockPrefs.read()) }
+    }
+
+    private func apply(_ new: DockPrefs) {
         guard new != prefs else {
             rebuildTiles()
             return
         }
         let replace = new.orientation != prefs.orientation || new.autohide != prefs.autohide
+        if new.withItems(of: prefs) != prefs {
+            appLog.info("The Dock's settings changed: \(new.orientation.rawValue, privacy: .public), size \(Double(new.tileSize), privacy: .public)")
+        }
         prefs = new
         rebuildTiles(force: true)
         if replace {
@@ -248,7 +293,45 @@ final class BarManager: NSObject {
         refreshDisplays()
         dockDisplay = findDockDisplay()
         rebuildBars()
+        checkFullScreen()
         updateActivity()
+        // A resized Dock changes its display's visible frame as it goes, and may save its new size a
+        // moment later: follow it now and keep looking for a couple of seconds.
+        if barsCanShow {
+            refreshSettings()
+            watchDock()
+        }
+    }
+
+    // MARK: Full screen
+
+    /// Entering or leaving a full-screen app switches that display's Space.
+    @objc private func spaceChanged(_ note: Notification) {
+        checkFullScreen()
+        // In case the Space's type lags the notification while the full-screen animation runs.
+        fullScreenRecheck?.invalidate()
+        let timer = Timer(timeInterval: 0.6, target: self, selector: #selector(recheckFullScreen(_:)), userInfo: nil, repeats: false)
+        RunLoop.main.add(timer, forMode: .common)
+        fullScreenRecheck = timer
+    }
+
+    @objc private func recheckFullScreen(_ timer: Timer) {
+        fullScreenRecheck = nil
+        checkFullScreen()
+    }
+
+    /// The Dock doesn't show over a full-screen app, so neither does the bar on that app's display.
+    private func checkFullScreen() {
+        let fullScreenDisplays = Spaces.fullScreenDisplays()
+        // "Main" stands for every display when displays don't have separate Spaces.
+        let everywhere = fullScreenDisplays.contains("Main")
+        for bar in bars.values {
+            let fullScreen = everywhere || displayUUIDs[bar.displayID].map(fullScreenDisplays.contains) == true
+            guard fullScreen != bar.fullScreen else { continue }
+            appLog.info("Display \(bar.displayID, privacy: .public) \(fullScreen ? "is showing" : "stopped showing", privacy: .public) a full-screen app")
+            bar.fullScreen = fullScreen
+            bar.updateVisibility(.fade)
+        }
     }
 
     // MARK: Settings
@@ -326,7 +409,7 @@ final class BarManager: NSObject {
     func pointerMoved() {
         let point = NSEvent.mouseLocation
         for bar in bars.values { bar.pointerMoved(to: point) }
-        if isPushingDockEdge(point) { watchForDockMove() }
+        if isPushingDockEdge(point) { watchDock() }
         updatePointerPolling()
     }
 
