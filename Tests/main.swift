@@ -60,11 +60,16 @@ MainActor.assumeIsolated {
     check("a new Dock size shows in the settings alone", resized.withItems(of: pinned) != pinned)
     check("the Dock's settings read without its items", DockPrefs.readSettings().apps.isEmpty)
 
-    // Measured on macOS 27: a left Dock at 44 pt reserves 64 pt of its display.
-    check("a Dock reserving 64 pt has 44 pt tiles", abs(BarMetrics.tile(reserving: 64) - 44) < 0.5)
-    check("every Dock size is read back from the whole points it reserves", stride(from: 16.0, through: 128, by: 0.5).allSatisfy { size in
-        let reserved = (BarMetrics.edgeMargin + BarMetrics(tile: CGFloat(size)).thickness).rounded(.down)
-        return abs(BarMetrics.tile(reserving: reserved) - CGFloat(size)) < 0.5
+    // Measured on macOS 27, a left Dock with 23 items on a 1152 pt-tall display: the strip each size
+    // reserves, up to 45 pt, past which that Dock can't grow.
+    let reserved: [(size: CGFloat, depth: CGFloat)] = [(28, 48), (30, 50), (34, 54), (36, 56), (37, 57), (38, 58), (39, 59),
+                                                       (40, 60), (41, 61), (42, 62), (43, 63), (44, 64), (45, 65)]
+    check("every measured Dock size is among those its strip allows",
+          reserved.allSatisfy { BarMetrics.tiles(reserving: $0.depth).contains($0.size) })
+    check("a full Dock set bigger than it can grow isn't taken to be its setting",
+          ![46, 54, 63, 71, 83].contains { BarMetrics.tiles(reserving: 65).contains($0) })
+    check("in-between sizes are among those their strip allows too", stride(from: 16.0, through: 128, by: 0.25).allSatisfy { size in
+        BarMetrics.tiles(reserving: (CGFloat(size) + 20).rounded(.down)).contains(CGFloat(size))
     })
 
     // MARK: Magnification on a Dock that fills its screen

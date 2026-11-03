@@ -109,9 +109,9 @@ final class BarController: NSObject {
 
     private var showsOnDockDisplay: Bool { isDockDisplay && Settings.shared.showOnDockDisplay }
 
-    /// Sizes the panel tightly around the bar, plus room for magnified and bouncing icons. `dockTile` is
-    /// the real Dock's tile size as it shows on its own display, when that can be measured.
-    func configure(screen: NSScreen, tiles: [Tile], icons: [String: NSImage], prefs: DockPrefs, dockTile: CGFloat?) {
+    /// Sizes the panel tightly around the bar, plus room for magnified and bouncing icons. `dockTiles` are
+    /// the tile sizes the real Dock can be showing on its own display, when that can be measured.
+    func configure(screen: NSScreen, tiles: [Tile], icons: [String: NSImage], prefs: DockPrefs, dockTiles: Range<CGFloat>?) {
         self.screen = screen
         self.prefs = prefs
         visibleFrame = screen.usableFrame
@@ -121,10 +121,10 @@ final class BarController: NSObject {
         let edges = showsOnDockDisplay ? visibleFrame : screen.frame
         let usable = vertical ? visibleFrame.height : visibleFrame.width
 
-        // The Dock's size as it shows, where that differs from its setting by more than measuring can
-        // miss: it has shrunk its icons to fit its display, or is being resized and hasn't saved yet.
+        // The Dock's size as it shows, when its setting can't be it: it has shrunk its icons to fit its
+        // display, or is being resized and hasn't saved its new size yet.
         var tile = prefs.tileSize
-        if let dockTile, abs(dockTile - tile) >= 0.5 { tile = dockTile }
+        if let dockTiles, !dockTiles.contains(tile) { tile = (dockTiles.lowerBound + dockTiles.upperBound) / 2 }
         // Shrink the icons further, as the Dock does, when the bar doesn't fit along this screen.
         let lengthPerPoint = BarMetrics(tile: 1).length(of: tiles)
         if lengthPerPoint * tile > usable - 8 { tile = max(16, (usable - 8) / lengthPerPoint) }

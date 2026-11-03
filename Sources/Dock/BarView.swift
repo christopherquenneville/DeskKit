@@ -32,10 +32,11 @@ struct BarMetrics {
         tiles.reduce(2 * endPadding) { $0 + slotLength($1.kind) }
     }
 
-    /// The tile size of a Dock that reserves `depth` points of its screen: its gap from the edge plus
-    /// its thickness, which macOS rounds down to whole points (44 pt tiles reserve 64).
-    static func tile(reserving depth: CGFloat) -> CGFloat {
-        (depth + 0.5 - edgeMargin) / BarMetrics(tile: 1).thickness
+    /// The tile sizes a Dock that reserves `depth` points of its screen can have. macOS reserves the
+    /// tile size plus 20 (the Dock's padding and its gap from the edge), rounded down to whole points:
+    /// measured on macOS 27 from 28 to 44 pt tiles.
+    static func tiles(reserving depth: CGFloat) -> Range<CGFloat> {
+        (depth - 20)..<(depth - 19)
     }
 }
 

@@ -133,7 +133,7 @@ final class BarManager: NSObject {
 
     private func configure(_ bar: BarController) {
         bar.configure(screen: screen(for: bar.displayID) ?? bar.screen, tiles: tiles, icons: icons, prefs: prefs,
-                      dockTile: measuredDockTile)
+                      dockTiles: measuredDockTiles)
     }
 
     /// How deep a strip the Dock reserves along its edge of `screen` (none where it isn't, or hides).
@@ -146,14 +146,14 @@ final class BarManager: NSObject {
         }
     }
 
-    /// The real Dock's tile size as it shows right now, read from the strip it reserves on its display.
-    /// That differs from its setting when it has shrunk its icons to fit (by its own rule, which stops
-    /// shorter than the bars' estimate), and while it's being resized. Nil when it hides, or a full-screen
-    /// app covers its display: there's no strip then.
-    private var measuredDockTile: CGFloat? {
+    /// The tile sizes the real Dock can be showing right now, read from the strip it reserves on its
+    /// display. Its setting isn't among them when it has shrunk its icons to fit (by its own rule, which
+    /// stops shorter than the bars' estimate), and while it's being resized. Nil when it hides, or a
+    /// full-screen app covers its display: there's no strip then.
+    private var measuredDockTiles: Range<CGFloat>? {
         guard !prefs.autohide, let dockDisplay, let screen = screen(for: dockDisplay) else { return nil }
-        let tile = BarMetrics.tile(reserving: reservedDepth(of: screen))
-        return tile >= 16 ? tile : nil
+        let tiles = BarMetrics.tiles(reserving: reservedDepth(of: screen))
+        return tiles.lowerBound >= 16 ? tiles : nil
     }
 
     private func rebuildBars() {
@@ -170,7 +170,7 @@ final class BarManager: NSObject {
             bar.updateVisibility(.fade)
             visibleFrames[id] = screen.visibleFrame
         }
-        appLog.info("Bars: \(self.bars.count, privacy: .public) displays, Dock on \(self.dockDisplay ?? 0, privacy: .public), \(self.tiles.count, privacy: .public) tiles, showing \(Double(self.measuredDockTile ?? 0), privacy: .public) pt")
+        appLog.info("Bars: \(self.bars.count, privacy: .public) displays, Dock on \(self.dockDisplay ?? 0, privacy: .public), \(self.tiles.count, privacy: .public) tiles, showing \(Double(self.measuredDockTiles?.lowerBound ?? 0), privacy: .public) pt or a little more")
     }
 
     /// The display whose visible frame is inset on the Dock's edge.
