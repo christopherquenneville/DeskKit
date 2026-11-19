@@ -53,18 +53,24 @@ enum WindowList {
         return candidates.filter { $0.id.map(onSpaces.contains) ?? false }
     }
 
-    /// Brings a window forward: un-minimizes and raises it, then makes its app frontmost.
-    /// Returns false for a window on another Space, which can only be raised once macOS has
-    /// switched there (see `raiseOnceReachable`).
+    /// Brings a window forward: un-minimizes it and brings it to the front on its own, as clicking it
+    /// does, rather than every window of its app. Returns false for a window on another Space, which
+    /// can only be raised once macOS has switched there (see `raiseOnceReachable`).
     @discardableResult
     static func raise(_ window: AppWindow, of app: NSRunningApplication) -> Bool {
         if app.isHidden { app.unhide() }
+        if let element = window.element, window.isMinimized { AX.set(element, kAXMinimizedAttribute, kCFBooleanFalse) }
+        // For a window on another Space, this also has macOS switch there.
+        if let id = window.id, WindowFocus.focus(id, of: app.processIdentifier) {
+            if let element = window.element { AXUIElementPerformAction(element, kAXRaiseAction as CFString) }
+            return window.element != nil
+        }
         if let element = window.element {
-            if window.isMinimized { AX.set(element, kAXMinimizedAttribute, kCFBooleanFalse) }
             AXUIElementPerformAction(element, kAXRaiseAction as CFString)
             AX.set(element, kAXMainAttribute, kCFBooleanTrue)
         }
-        // Accessibility can make another app frontmost even though DeskKit itself isn't active.
+        // Accessibility can make another app frontmost even though DeskKit itself isn't active, though
+        // that brings all its windows forward.
         if !AX.set(AXUIElementCreateApplication(app.processIdentifier), kAXFrontmostAttribute, kCFBooleanTrue),
            let url = app.bundleURL {
             let configuration = NSWorkspace.OpenConfiguration()
@@ -81,8 +87,8 @@ enum WindowList {
         guard let element = AX.windows(of: app.processIdentifier).first(where: { AX.windowID(of: $0) == id }) else {
             return false
         }
+        if !WindowFocus.focus(id, of: app.processIdentifier) { AX.set(element, kAXMainAttribute, kCFBooleanTrue) }
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
-        AX.set(element, kAXMainAttribute, kCFBooleanTrue)
         return true
     }
 }

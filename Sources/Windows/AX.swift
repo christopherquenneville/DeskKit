@@ -88,6 +88,9 @@ enum Spaces {
         return (unsafeBitCast(connection, to: MainConnection.self), unsafeBitCast(copy, to: CopySpacesForWindows.self))
     }()
 
+    /// Whether the private Spaces API is there to ask; `windowsOnSomeSpace` finds nothing without it.
+    static var available: Bool { functions != nil }
+
     /// The windows among `ids` that are on some Space (any Space, current or not).
     static func windowsOnSomeSpace(_ ids: [CGWindowID]) -> Set<CGWindowID> {
         guard let (mainConnection, copySpaces) = functions else { return [] }
@@ -119,5 +122,42 @@ enum Spaces {
             result.insert(id)
         }
         return result
+    }
+}
+
+/// Brings one window forward on its own, as clicking it does, instead of activating its app, which
+/// brings every window of the app forward. Uses the window server's private calls (the ones AltTab and
+/// yabai use), looked up at run time; without them, callers activate the app instead.
+enum WindowFocus {
+    private typealias ProcessForPID = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
+    private typealias SetFrontProcess = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, CGWindowID, UInt32) -> Int32
+    private typealias PostEventRecord = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> Int32
+
+    private static let functions: (ProcessForPID, SetFrontProcess, PostEventRecord)? = {
+        let all = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let process = dlsym(all, "GetProcessForPID"), let front = dlsym(all, "_SLPSSetFrontProcessWithOptions"),
+              let post = dlsym(all, "SLPSPostEventRecordTo") else { return nil }
+        return (unsafeBitCast(process, to: ProcessForPID.self), unsafeBitCast(front, to: SetFrontProcess.self),
+                unsafeBitCast(post, to: PostEventRecord.self))
+    }()
+
+    /// Makes `window` the key window of its app, `pid`, and that app frontmost. Returns whether it could.
+    @discardableResult
+    static func focus(_ window: CGWindowID, of pid: pid_t) -> Bool {
+        guard let (processForPID, setFrontProcess, postEventRecord) = functions else { return false }
+        var process = ProcessSerialNumber()
+        // 0x200: as if the user had clicked the window, which brings only it forward.
+        guard processForPID(pid, &process) == noErr, setFrontProcess(&process, window, 0x200) == 0 else { return false }
+        // Two synthetic window server events then make it the key window (worked out by Hammerspoon's users).
+        var event = [UInt8](repeating: 0, count: 0xf8)
+        event[0x04] = 0xf8
+        event[0x3a] = 0x10
+        withUnsafeBytes(of: window.littleEndian) { event.replaceSubrange(0x3c..<0x40, with: $0) }
+        event.replaceSubrange(0x20..<0x30, with: repeatElement(UInt8(0xff), count: 0x10))
+        for step: UInt8 in [1, 2] {
+            event[0x08] = step
+            _ = postEventRecord(&process, &event)
+        }
+        return true
     }
 }

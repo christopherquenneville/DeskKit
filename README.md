@@ -40,7 +40,9 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
   - *Always Hide*.
 
   A hidden copy slides back in when the pointer touches that display's Dock edge. Whatever the
-  setting, a display showing a full-screen app has no copy, as it has no Dock.
+  setting, a display showing a full-screen app has no copy, as it has no Dock. When the app in front
+  hides the Dock, as games in a borderless full-screen window do, the copies hide too, and when it
+  asks for the Dock to hide until the pointer reaches it, so do they.
 - **Keeps windows clear of the copies.** On the display with the real Dock, a zoomed window stops at
   the Dock. DeskKit does the same beside its copies: a window that's zoomed, filled, tiled or opened
   against one is moved to start beside it, and zooming it again still restores its old size. A window
@@ -163,7 +165,9 @@ explains the one-time setup it needs).
   in the Dock (found through the Accessibility API) is held back if the app has two or more windows,
   and the picker opens instead; anything else is passed on untouched. Windows come from the
   Accessibility API, plus the window server for windows on other Spaces, and previews from
-  ScreenCaptureKit.
+  ScreenCaptureKit. The window you pick comes forward on its own, as if you'd clicked it, rather than
+  with every window of its app: that takes the window server's private calls (the ones AltTab and
+  yabai use), looked up at run time; without them, the whole app comes forward.
 - **Reversing the mouse wheel** is another event tap, which flips scroll events that aren't continuous.
 
 ## Differences from the real Dock

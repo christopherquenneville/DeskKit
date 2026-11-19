@@ -29,6 +29,8 @@ final class BarController: NSObject {
     var covered = false
     /// The display is showing a full-screen app, where the Dock doesn't show either.
     var fullScreen = false
+    /// What the frontmost app has asked of the Dock (a game in a borderless full-screen window hides it).
+    var appRequest = DockRequest.none
     private var revealed = false
     private var revealTimer: Timer?
     private var lingerTimer: Timer?
@@ -93,7 +95,7 @@ final class BarController: NSObject {
     /// The edge sensor stands in for a hidden bar on a display without the Dock. Not over a full-screen
     /// app, where it could keep the Dock itself from appearing at that edge.
     private func updateSensor() {
-        guard autoHides && !isDockDisplay && alphaTarget == 0 && !fullScreen else {
+        guard autoHides && !isDockDisplay && alphaTarget == 0 && !fullScreen && appRequest != .hide else {
             sensor.hide()
             return
         }
@@ -189,6 +191,8 @@ final class BarController: NSObject {
     // MARK: Showing and hiding
 
     private var effectiveHideMode: HideMode {
+        // Like the Dock, whatever its own setting.
+        if appRequest == .autoHide { return .always }
         let mode = Settings.shared.hideMode
         return mode == .sameAsDock ? (prefs.autohide ? .always : .never) : mode
     }
@@ -200,7 +204,7 @@ final class BarController: NSObject {
 
     private var shouldShow: Bool {
         if isDockDisplay && !Settings.shared.showOnDockDisplay { return false }
-        if fullScreen { return false }
+        if fullScreen || appRequest == .hide { return false }
         switch effectiveHideMode {
         case .never, .sameAsDock: return true
         case .whenCovered: return !covered || revealed
@@ -234,6 +238,15 @@ final class BarController: NSObject {
         updateSensor()
         manager.updatePointerPolling()
         startAnimating()
+    }
+
+    /// macOS can take a window off every Space while a display changes mode (a game switching
+    /// resolution does it), which would leave a bar that should show off screen for good.
+    func restoreIfLost() {
+        guard alphaTarget > 0, Spaces.available, panel.windowNumber > 0,
+              Spaces.windowsOnSomeSpace([CGWindowID(panel.windowNumber)]).isEmpty else { return }
+        appLog.info("Display \(self.displayID, privacy: .public)'s bar had been taken off screen; putting it back")
+        panel.orderFrontRegardless()
     }
 
     func hideModeChanged() {

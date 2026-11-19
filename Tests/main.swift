@@ -60,6 +60,16 @@ MainActor.assumeIsolated {
     check("a new Dock size shows in the settings alone", resized.withItems(of: pinned) != pinned)
     check("the Dock's settings read without its items", DockPrefs.readSettings().apps.isEmpty)
 
+    // MARK: Apps that hide the Dock
+
+    // World of Warcraft in its borderless full-screen window asks for exactly this (seen on macOS 27).
+    check("a game hiding the Dock and menu bar hides the copies", DockRequest([.hideDock, .hideMenuBar]) == .hide)
+    check("an app asking for an auto-hiding Dock makes the copies auto-hide", DockRequest([.autoHideDock, .autoHideMenuBar]) == .autoHide)
+    check("a full-screen app is left to the full-screen check", DockRequest([.fullScreen, .autoHideDock, .autoHideMenuBar]) == .none)
+    check("an ordinary app leaves the copies as they are", DockRequest([]) == .none)
+
+    // MARK: The Dock's size from the strip it reserves
+
     // Measured on macOS 27, a left Dock with 23 items on a 1152 pt-tall display: the strip each size
     // reserves, up to 45 pt, past which that Dock can't grow.
     let reserved: [(size: CGFloat, depth: CGFloat)] = [(28, 48), (30, 50), (34, 54), (36, 56), (37, 57), (38, 58), (39, 59),

@@ -1,5 +1,24 @@
 import AppKit
 
+/// What the frontmost app has asked of the Dock, through its presentation options.
+enum DockRequest: Equatable {
+    case none, autoHide, hide
+
+    /// A game in a borderless full-screen window hides the Dock. A full-screen app asks for it to
+    /// auto-hide too, but that only affects its own display, which the full-screen check handles.
+    init(_ options: NSApplication.PresentationOptions) {
+        if options.contains(.fullScreen) {
+            self = .none
+        } else if options.contains(.hideDock) {
+            self = .hide
+        } else if options.contains(.autoHideDock) {
+            self = .autoHide
+        } else {
+            self = .none
+        }
+    }
+}
+
 /// Keeps one bar on every display except the one the real Dock is on, mirrors the Dock's
 /// contents and settings into them, and carries out what the bars are asked to do.
 ///
@@ -23,6 +42,8 @@ final class BarManager: NSObject {
     private var dockWatchTimer: Timer?
     private var dockWatchTicks = 0
     private var fullScreenRecheck: Timer?
+    private var appRequest = DockRequest.none
+    private var presentationObservation: NSKeyValueObservation?
     private var openableCache: [String: Bool] = [:]
     private var ticks = 0
     private var displays: [(screen: NSScreen, id: CGDirectDisplayID)] = []
@@ -49,6 +70,7 @@ final class BarManager: NSObject {
         pointerTimer = nil
         dockWatchTimer = nil
         fullScreenRecheck = nil
+        presentationObservation = nil
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         windowKeeper.stop()
@@ -63,8 +85,15 @@ final class BarManager: NSObject {
         rebuildTiles(force: true)
         rebuildBars()
         checkFullScreen()
+        checkAppRequest()
         windowKeeper.strips = { [unowned self] in self.bars.values.compactMap(\.keepClearStrip) }
         updateActivity()
+
+        // The frontmost app's request changes as apps come and go from the front, or as a game
+        // enters and leaves its full-screen window.
+        presentationObservation = NSApp.observe(\.currentSystemPresentationOptions) { [weak self] _, _ in
+            Task { @MainActor in self?.checkAppRequest() }
+        }
 
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -166,6 +195,7 @@ final class BarManager: NSObject {
             let bar = bars[id] ?? BarController(screen: screen, manager: self)
             bars[id] = bar
             bar.isDockDisplay = id == dockDisplay
+            bar.appRequest = appRequest
             configure(bar)
             bar.updateVisibility(.fade)
             visibleFrames[id] = screen.visibleFrame
@@ -235,6 +265,8 @@ final class BarManager: NSObject {
         refreshPrefs(force: false)
         // A full-screen app that quits may take its Space away without a Space change being announced.
         if bars.values.contains(where: \.fullScreen) { checkFullScreen() }
+        checkAppRequest()
+        if ticks % 5 == 0 { restoreLostBars() }
     }
 
     private func refreshPrefs(force: Bool) {
@@ -301,6 +333,13 @@ final class BarManager: NSObject {
             refreshSettings()
             watchDock()
         }
+        // A display changing mode (a game switching resolution) can take a bar off every Space a
+        // moment after this.
+        for delay in [1.0, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated { self?.restoreLostBars() }
+            }
+        }
     }
 
     // MARK: Full screen
@@ -308,6 +347,7 @@ final class BarManager: NSObject {
     /// Entering or leaving a full-screen app switches that display's Space.
     @objc private func spaceChanged(_ note: Notification) {
         checkFullScreen()
+        restoreLostBars()
         // In case the Space's type lags the notification while the full-screen animation runs.
         fullScreenRecheck?.invalidate()
         let timer = Timer(timeInterval: 0.6, target: self, selector: #selector(recheckFullScreen(_:)), userInfo: nil, repeats: false)
@@ -332,6 +372,25 @@ final class BarManager: NSObject {
             bar.fullScreen = fullScreen
             bar.updateVisibility(.fade)
         }
+    }
+
+    /// The frontmost app can ask macOS to hide the Dock (a game in a borderless full-screen window
+    /// does), or to have it auto-hide. The bars do as the Dock does.
+    private func checkAppRequest() {
+        let request = DockRequest(NSApp.currentSystemPresentationOptions)
+        guard request != appRequest else { return }
+        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "The frontmost app"
+        let wants = request == .hide ? "hidden" : request == .autoHide ? "auto-hiding" : "back as usual"
+        appLog.info("\(app, privacy: .public) wants the Dock \(wants, privacy: .public)")
+        appRequest = request
+        for bar in bars.values {
+            bar.appRequest = request
+            bar.hideModeChanged()
+        }
+    }
+
+    private func restoreLostBars() {
+        for bar in bars.values { bar.restoreIfLost() }
     }
 
     // MARK: Settings
@@ -457,6 +516,7 @@ final class BarManager: NSObject {
                 if note.name == NSWorkspace.didActivateApplicationNotification { windowKeeper.snapshot(app.processIdentifier) }
             }
         }
+        if note.name == NSWorkspace.didActivateApplicationNotification { checkAppRequest() }
         rebuildTiles()
     }
 
