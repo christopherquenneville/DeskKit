@@ -30,7 +30,8 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
 - **Works like the Dock**: click to open an app or bring it forward (it reopens a window if it has
   none), open folders, files and the Trash; right-click or Control-click for Hide/Show, Show in
   Finder and Quit (hold Option for Force Quit); drop files on an app to open them with it, or on the
-  Trash to move them there. Launching apps bounce until they've finished launching.
+  Trash to move them there (for a protected item, such as an app installed for all users, Finder asks
+  for your password, as with the Dock's Trash). Launching apps bounce until they've finished launching.
 - **Looks like the Dock**: Liquid Glass on macOS 26 and later (tuned against the real Dock), vibrancy
   on earlier versions, with name labels, magnification and light and dark mode.
 - **Hiding**, under *Dock Options* in the menu (or right-click an empty part of a copy):
@@ -74,6 +75,7 @@ wheel. It's off until you turn on *Reverse Mouse Wheel* in the menu.
 | --- | --- | --- |
 | **Accessibility** (called *Device Control and Data Access* in macOS 27) | the window picker, reversing the mouse wheel, keeping windows clear of the copies | those three are off; the copies of the Dock still work |
 | **Screen Recording** (*Screen & System Audio Recording* in macOS 15 and later) | window previews in the picker | the picker shows the app's icon instead |
+| **Automation** (to control Finder; asked the first time it's needed) | moving protected items you drop on a copy's Trash, with your password | those items stay where they are |
 
 DeskKit explains and asks for these on its first run, and its menu shows what's missing. Recent
 versions of macOS may now and then ask you to confirm that DeskKit can still record the screen.

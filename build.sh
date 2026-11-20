@@ -89,6 +89,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>12.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>DeskKit asks Finder to move items you drop on a Dock copy's Trash when it can't move them itself, so Finder can ask for your password as the Dock's Trash does.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
@@ -104,10 +106,10 @@ if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
 fi
 if [[ -n "$IDENTITY" ]]; then
-    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+    codesign --force --options runtime --timestamp --entitlements Resources/DeskKit.entitlements --sign "$IDENTITY" "$APP"
     echo "Signed with $IDENTITY"
 else
-    codesign --force --sign - "$APP"
+    codesign --force --entitlements Resources/DeskKit.entitlements --sign - "$APP"
     echo "Signed ad hoc (no Developer ID Application certificate found)"
 fi
 echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/$NAME"))"

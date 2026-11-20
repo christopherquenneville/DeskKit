@@ -19,6 +19,30 @@ enum DockRequest: Equatable {
     }
 }
 
+/// Moves items to the Trash through Finder, for what DeskKit itself may not move (a protected app,
+/// say): Finder asks for an administrator's password where one is needed, as the Dock's own Trash
+/// does, and explains any other failure. The first time, macOS asks to let DeskKit control Finder.
+enum FinderTrash {
+    static func move(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        // Off the main thread: the reply waits for the permission and password prompts.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let finder = NSAppleEventDescriptor(bundleIdentifier: "com.apple.finder")
+            let delete = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite), eventID: AEEventID(kAEDelete),
+                                                targetDescriptor: finder, returnID: AEReturnID(kAutoGenerateReturnID),
+                                                transactionID: AETransactionID(kAnyTransactionID))
+            let items = NSAppleEventDescriptor.list()
+            for url in urls { items.insert(NSAppleEventDescriptor(fileURL: url), at: 0) }
+            delete.setParam(items, forKeyword: keyDirectObject)
+            do {
+                _ = try delete.sendEvent(options: [.waitForReply], timeout: 300)
+            } catch {
+                appLog.error("Finder didn't move it to the Trash: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+}
+
 /// Keeps one bar on every display except the one the real Dock is on, mirrors the Dock's
 /// contents and settings into them, and carries out what the bars are asked to do.
 ///
@@ -696,8 +720,10 @@ final class BarManager: NSObject {
         guard !urls.isEmpty else { return false }
         switch tile.kind {
         case .trash:
-            NSWorkspace.shared.recycle(urls) { _, error in
-                if let error { appLog.error("Moving to the Trash failed: \(error.localizedDescription, privacy: .public)") }
+            NSWorkspace.shared.recycle(urls) { trashed, error in
+                guard let error else { return }
+                appLog.error("Asking Finder, as moving to the Trash failed: \(error.localizedDescription, privacy: .public)")
+                FinderTrash.move(urls.filter { trashed[$0] == nil })
             }
             return true
         case .app:
