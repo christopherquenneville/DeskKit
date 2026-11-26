@@ -32,6 +32,16 @@ enum AX {
     }
 
     static func setFrame(_ element: AXUIElement, _ rect: CGRect) {
+        // An app with "enhanced user interface" on (assistive apps leave it on) animates each size and
+        // position change, so the steps below would bounce the window: switch it off meanwhile, as
+        // Rectangle and yabai do.
+        let app = AXUIElementCreateApplication(pid(of: element))
+        let enhanced = bool(app, "AXEnhancedUserInterface")
+        if enhanced {
+            appLog.debug("Pausing enhanced user interface of \(pid(of: element), privacy: .public) to move a window")
+            set(app, "AXEnhancedUserInterface", kCFBooleanFalse)
+        }
+        defer { if enhanced { set(app, "AXEnhancedUserInterface", kCFBooleanTrue) } }
         // Size, then position, then size again: some apps limit a size that doesn't fit where the window is.
         var size = rect.size, origin = rect.origin
         if let value = AXValueCreate(.cgSize, &size) { set(element, kAXSizeAttribute, value) }

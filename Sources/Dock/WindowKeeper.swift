@@ -31,12 +31,20 @@ final class WindowKeeper {
         var restoredAt: CFTimeInterval = 0
         var pending = false
         var resized = false
+        /// When the first of the resize reports still waiting to be handled came in, and the latest.
+        var resizedAt: CFTimeInterval = 0
+        var lastResizedAt: CFTimeInterval = 0
         var created = false
     }
 
-    /// macOS reports a zoom's final frame as soon as the zoom starts, then animates for about 0.4 s
-    /// and reports it again at the end. Within this window after fitting, a full-size report is that
-    /// animation finishing (fit again), not the user zooming back out.
+    /// macOS reports a zoom's or tile's final frame as soon as it starts, then animates the window there
+    /// for about this long. Moving the window meanwhile fights the animation and makes it jitter.
+    private static let animationDuration: CFTimeInterval = 0.4
+    /// Some apps (Chrome) report every frame of the animation instead, which can run longer: it's over
+    /// once they've been quiet this long.
+    private static let quietAfterAnimation: CFTimeInterval = 0.12
+    /// Within this window after fitting, a window's reports are macOS still settling it (a full-size
+    /// report is the zoom animation finishing), not the user zooming back out.
     private static let animationAllowance: CFTimeInterval = 0.8
 
     /// The strips of the bars that stay on screen, asked for whenever a window needs checking.
@@ -47,6 +55,7 @@ final class WindowKeeper {
     private var watchRetries: [pid_t: Int] = [:]
     private var tracked: [Tracked] = []
     private var settleTimer: Timer?
+    private var recheckTimer: Timer?
     private static let tolerance: CGFloat = 12
 
     func start(watching apps: [RunningApp]) {
@@ -63,6 +72,8 @@ final class WindowKeeper {
         tracked.removeAll()
         settleTimer?.invalidate()
         settleTimer = nil
+        recheckTimer?.invalidate()
+        recheckTimer = nil
     }
 
     func watch(_ pid: pid_t) {
@@ -137,6 +148,9 @@ final class WindowKeeper {
             if !tracked[index].pending { tracked[index].lastFrame = frame(of: window) }
             return
         case kAXWindowResizedNotification:
+            let now = CACurrentMediaTime()
+            if !tracked[index].resized { tracked[index].resizedAt = now }
+            tracked[index].lastResizedAt = now
             tracked[index].resized = true
         case kAXWindowCreatedNotification:
             tracked[index].created = true
@@ -144,8 +158,8 @@ final class WindowKeeper {
             break
         }
         tracked[index].pending = true
-        // Act almost at once, so a zoom heads straight for its place beside the bar; the short wait
-        // only gathers the moved and resized reports that arrive together.
+        // The short wait gathers the moved and resized reports that arrive together; a zoom or tile
+        // then waits for its animation to finish (see `settle`).
         if settleTimer == nil { scheduleSettle(after: 0.02) }
     }
 
@@ -165,8 +179,17 @@ final class WindowKeeper {
         let now = CACurrentMediaTime()
         let strips = strips()
         var gone: [Int] = []
+        var nextCheck: TimeInterval?
         for i in tracked.indices where tracked[i].pending {
             let entry = tracked[i]
+            // Let a zoom or tile finish animating, then move the window once. (Reports that follow a fit
+            // of ours are handled at once, below.)
+            let settlingFit = entry.fitted != nil && now - entry.fittedAt < Self.animationAllowance
+            let wait = max(Self.animationDuration - (now - entry.resizedAt), Self.quietAfterAnimation - (now - entry.lastResizedAt))
+            if entry.resized, !entry.created, !settlingFit, wait > 0 {
+                nextCheck = min(nextCheck ?? wait, wait)
+                continue
+            }
             tracked[i].pending = false
             tracked[i].resized = false
             tracked[i].created = false
@@ -176,6 +199,14 @@ final class WindowKeeper {
             }
             tracked[i].lastFrame = frame
             appLog.debug("Window \(String(describing: frame), privacy: .public) resized \(entry.resized) created \(entry.created), \(strips.count) strips")
+            // While its zoom settles, macOS can give a fitted window its new size but leave it where it was
+            // for a moment. Put it where it was fitted to: fitting what's left of it again made it narrower
+            // each time.
+            if let fitted = entry.fitted, now - entry.fittedAt < Self.animationAllowance {
+                if !close(frame, fitted) { setFrame(entry.window, fitted) }
+                tracked[i].lastFrame = fitted
+                continue
+            }
             guard entry.resized || entry.created, isOrdinaryWindow(entry.window),
                   let strip = strips.first(where: { touches(frame, $0) }) else {
                 if let fitted = entry.fitted, !close(frame, fitted) {
@@ -211,8 +242,28 @@ final class WindowKeeper {
             tracked[i].fitted = target
             tracked[i].fittedAt = now
             tracked[i].lastFrame = target
+            scheduleRecheck()
         }
         for i in gone.reversed() { tracked.remove(at: i) }
+        if let nextCheck, settleTimer == nil { scheduleSettle(after: nextCheck) }
+    }
+
+    /// A window that took its new size but not yet its place may send no more reports: look again
+    /// once the zoom has had time to finish.
+    private func scheduleRecheck() {
+        recheckTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.animationAllowance * 0.6, target: self, selector: #selector(recheck(_:)), userInfo: nil, repeats: false)
+        RunLoop.main.add(timer, forMode: .common)
+        recheckTimer = timer
+    }
+
+    @objc private func recheck(_ timer: Timer) {
+        recheckTimer = nil
+        let now = CACurrentMediaTime()
+        for i in tracked.indices where tracked[i].fitted != nil && now - tracked[i].fittedAt < Self.animationAllowance {
+            tracked[i].pending = true
+        }
+        if settleTimer == nil { scheduleSettle(after: 0) }
     }
 
     // MARK: Geometry
