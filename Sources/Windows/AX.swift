@@ -84,6 +84,43 @@ enum AX {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else { return nil }
         return unsafeBitCast(symbol, to: GetWindow.self)
     }()
+
+    /// The elements of the windows among `ids` that `windows(of:)` leaves out because they're on
+    /// another Space (a full-screen app's, say). An app hands out its elements by number, so this asks
+    /// for them one number at a time, as AltTab does, until it has them all or `budget` seconds have
+    /// gone (a number takes about 12 µs). `_AXUIElementCreateWithRemoteToken` is private and looked up
+    /// at run time; without it this finds nothing. It can be called from any thread.
+    static func windowsOnOtherSpaces(_ ids: Set<CGWindowID>, of pid: pid_t, within budget: CFTimeInterval) -> [CGWindowID: AXUIElement] {
+        guard !ids.isEmpty, let createElement = createWithRemoteToken else { return [:] }
+        // A remote token: the process, 0, "coco" (an AppKit app's elements), then the element's number.
+        var token = Data(count: 20)
+        withUnsafeBytes(of: pid) { token.replaceSubrange(0..<4, with: $0) }
+        withUnsafeBytes(of: UInt32(0x636f_636f)) { token.replaceSubrange(8..<12, with: $0) }
+        var found: [CGWindowID: AXUIElement] = [:]
+        let deadline = CACurrentMediaTime() + budget
+        var number: UInt64 = 0
+        search: while found.count < ids.count, CACurrentMediaTime() < deadline {
+            for _ in 0..<64 {
+                withUnsafeBytes(of: number) { token.replaceSubrange(12..<20, with: $0) }
+                number += 1
+                guard let element = createElement(token as CFData)?.takeRetainedValue() else { continue }
+                AXUIElementSetMessagingTimeout(element, 0.25)
+                var role: CFTypeRef?
+                let status = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+                if status == .cannotComplete { break search }  // The app isn't answering.
+                guard status == .success, role as? String == kAXWindowRole,
+                      let id = windowID(of: element), ids.contains(id) else { continue }
+                found[id] = element
+            }
+        }
+        return found
+    }
+
+    private typealias CreateWithRemoteToken = @convention(c) (CFData) -> Unmanaged<AXUIElement>?
+    private static let createWithRemoteToken: CreateWithRemoteToken? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementCreateWithRemoteToken") else { return nil }
+        return unsafeBitCast(symbol, to: CreateWithRemoteToken.self)
+    }()
 }
 
 /// Which windows belong to a Space, from the window server's private Spaces API (used the same way
@@ -101,16 +138,19 @@ enum Spaces {
     /// Whether the private Spaces API is there to ask; `windowsOnSomeSpace` finds nothing without it.
     static var available: Bool { functions != nil }
 
+    /// DeskKit's connection to the window server, for its other private calls; nil if they're gone.
+    static var connection: Int32? { functions?.0() }
+
+    /// The Spaces a window is on: none for one that's closed, hidden or minimized.
+    static func spaces(of window: CGWindowID) -> Set<UInt64> {
+        guard let (mainConnection, copySpaces) = functions else { return [] }
+        let spaces = copySpaces(mainConnection(), 7, [NSNumber(value: window)] as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
+        return Set(spaces.map(\.uint64Value))
+    }
+
     /// The windows among `ids` that are on some Space (any Space, current or not).
     static func windowsOnSomeSpace(_ ids: [CGWindowID]) -> Set<CGWindowID> {
-        guard let (mainConnection, copySpaces) = functions else { return [] }
-        let connection = mainConnection()
-        var result = Set<CGWindowID>()
-        for id in ids {
-            let spaces = copySpaces(connection, 7, [NSNumber(value: id)] as CFArray)?.takeRetainedValue() as? [NSNumber] ?? []
-            if !spaces.isEmpty { result.insert(id) }
-        }
-        return result
+        Set(ids.filter { !spaces(of: $0).isEmpty })
     }
 
     private typealias CopyManagedDisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
@@ -119,17 +159,32 @@ enum Spaces {
         return unsafeBitCast(symbol, to: CopyManagedDisplaySpaces.self)
     }()
 
+    /// Each display's Spaces; empty if the private API is gone.
+    private static func displays() -> [[String: Any]] {
+        guard let (mainConnection, _) = functions, let copy = copyManagedDisplaySpaces else { return [] }
+        return copy(mainConnection())?.takeRetainedValue() as? [[String: Any]] ?? []
+    }
+
     /// The displays showing a full-screen app's Space right now (type 4), by UUID, or "Main" when
     /// displays don't have separate Spaces. Empty if the private API is gone.
     static func fullScreenDisplays() -> Set<String> {
-        guard let (mainConnection, _) = functions, let copy = copyManagedDisplaySpaces,
-              let displays = copy(mainConnection())?.takeRetainedValue() as? [[String: Any]] else { return [] }
         var result = Set<String>()
-        for display in displays {
+        for display in displays() {
             guard let id = display["Display Identifier"] as? String,
                   let current = display["Current Space"] as? [String: Any],
                   (current["type"] as? NSNumber)?.intValue == 4 else { continue }
             result.insert(id)
+        }
+        return result
+    }
+
+    /// Every full-screen app's Space (type 4), showing or not.
+    static func fullScreenSpaces() -> Set<UInt64> {
+        var result = Set<UInt64>()
+        for display in displays() {
+            for space in display["Spaces"] as? [[String: Any]] ?? [] where (space["type"] as? NSNumber)?.intValue == 4 {
+                if let id = space["ManagedSpaceID"] as? NSNumber { result.insert(id.uint64Value) }
+            }
         }
         return result
     }

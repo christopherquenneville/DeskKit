@@ -81,10 +81,22 @@ final class WindowPicker: NSObject, NSWindowDelegate {
 
         // Previews at full size, so they stay sharp if closing windows makes room for bigger ones.
         let scale = panel.screen?.backingScaleFactor ?? 2
-        WindowPreviews.capture(windows.compactMap(\.id), fitting: Layout.preview, scale: scale) { [weak self] id, image in
+        let elsewhere = Set(windows.filter(\.isOnAnotherSpace).compactMap(\.id))
+        WindowPreviews.capture(windows.compactMap(\.id), elsewhere: elsewhere, fitting: Layout.preview, scale: scale) { [weak self] id, image in
             guard let self, self.panel === panel else { return }
             self.previews[id] = image
             if let i = self.windows.firstIndex(where: { $0.id == id }) { self.cells[i].preview = image }
+        }
+        // Accessibility doesn't list windows on other Spaces: look for them, so they can be closed too.
+        if !elsewhere.isEmpty {
+            WindowList.findOnOtherSpaces(elsewhere, of: pid) { [weak self] found in
+                guard let self, self.panel === panel else { return }
+                for (i, window) in self.windows.enumerated() where window.element == nil && self.cells.indices.contains(i) {
+                    guard let id = window.id, let element = found[id] else { continue }
+                    self.windows[i].element = element
+                    self.cells[i].canClose = true
+                }
+            }
         }
         return true
     }
@@ -129,7 +141,9 @@ final class WindowPicker: NSObject, NSWindowDelegate {
             timer.invalidate()
             return
         }
-        if WindowList.raiseOnceReachable(pending.id, of: pending.app) || pending.tries >= 8 {
+        let raised = WindowList.raiseOnceReachable(pending.id, of: pending.app)
+        if raised || pending.tries >= 8 {
+            if !raised { appLog.info("Window \(pending.id, privacy: .public) didn't come to the current Space") }
             pendingRaise = nil
             timer.invalidate()
             raiseTimer = nil
@@ -161,7 +175,14 @@ final class WindowPicker: NSObject, NSWindowDelegate {
 
     /// Presses the window's own close button, as clicking it would.
     fileprivate func closeWindow(_ index: Int) {
-        guard closing == nil, windows.indices.contains(index), let window = windows[index].element,
+        guard closing == nil, let app, windows.indices.contains(index) else {
+            NSSound.beep()
+            return
+        }
+        if windows[index].element == nil, windows[index].isOnAnotherSpace, let id = windows[index].id {
+            windows[index].element = AX.windowsOnOtherSpaces([id], of: app.processIdentifier, within: 0.3)[id]
+        }
+        guard let window = windows[index].element,
               let button = AX.attribute(window, kAXCloseButtonAttribute), CFGetTypeID(button) == AXUIElementGetTypeID(),
               AXUIElementPerformAction(unsafeDowncast(button, to: AXUIElement.self), kAXPressAction as CFString) == .success else {
             NSSound.beep()
@@ -180,7 +201,7 @@ final class WindowPicker: NSObject, NSWindowDelegate {
             return
         }
         let index = windows.firstIndex { $0.element.map { CFEqual($0, window) } ?? false }
-        guard AX.windows(of: app.processIdentifier).contains(where: { CFEqual($0, window) }) else {
+        guard let index, WindowList.isOpen(windows[index], of: app.processIdentifier) else {
             // Closed: drop it, and make the picker fit the rest.
             stopWatchingClose()
             if let index { windows.remove(at: index) }
@@ -191,10 +212,10 @@ final class WindowPicker: NSObject, NSWindowDelegate {
         if children.contains(where: { AX.string($0, kAXRoleAttribute) == kAXSheetRole }) {
             // The app is asking something first (whether to save, usually): show that window to answer it.
             stopWatchingClose()
-            if let index { choose(index) }
+            choose(index)
         } else if CACurrentMediaTime() - since > 2 {
             stopWatchingClose()
-            if let index { cells[index].isClosing = false }
+            cells[index].isClosing = false
         }
     }
 
@@ -320,10 +341,11 @@ final class WindowPicker: NSObject, NSWindowDelegate {
                                  y: top - CGFloat(row + 1) * cellSize.height - CGFloat(row) * Layout.spacing)
             let cell = PickerCell(frame: NSRect(origin: origin, size: cellSize), previewHeight: Layout.preview.height * scale)
             cell.title = window.title.isEmpty ? (app.localizedName ?? "Window") : window.title
-            cell.subtitle = window.isMinimized ? "Minimized" : (window.isOnAnotherSpace ? "On another Space" : nil)
+            cell.subtitle = window.isMinimized ? "Minimized"
+                : window.isFullScreen ? "Full Screen" : window.isOnAnotherSpace ? "On another Space" : nil
             cell.placeholder = app.icon
             cell.preview = window.id.flatMap { previews[$0] }
-            // Windows on other Spaces can't be reached to close them.
+            // A window on another Space can be closed once its element has been found.
             cell.canClose = window.element != nil
             cell.onClick = { [weak self] in self?.choose(i) }
             cell.onClose = { [weak self] in self?.closeWindow(i) }

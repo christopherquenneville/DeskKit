@@ -54,11 +54,12 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
 
 - Click an app that has two or more windows, in the real Dock or one of DeskKit's copies, and a small
   panel opens beside its icon with a preview of each window, minimized ones included (and, with
-  Screen Recording access, ones on other Spaces).
+  Screen Recording access, ones on other Spaces, full-screen ones included).
 - Click a preview (or use the arrow keys and Return) to bring just that window forward. A minimized
-  window is restored; for one on another Space, macOS switches there.
-- Hover a preview and click its **X** (or press ⌘W) to close that window. The picker stays open for
-  the rest. If the app asks whether to save first, that window comes forward so you can answer.
+  window is restored; for one on another Space (a full-screen one, say), macOS switches there.
+- Hover a preview and click its **X** (or press ⌘W) to close that window, even one on another Space.
+  The picker stays open for the rest. If the app asks whether to save first, that window comes
+  forward so you can answer.
 - Esc, a click anywhere else, or clicking the icon again closes the picker.
 - Everything else reaches the Dock as before: apps with one window open as usual, and a click with a
   modifier key, a drag (to rearrange icons) or a press and hold (for the Dock's menu) isn't caught.
@@ -166,10 +167,14 @@ explains the one-time setup it needs).
 - **The window picker** watches mouse presses with an event tap. A plain click on a running app's icon
   in the Dock (found through the Accessibility API) is held back if the app has two or more windows,
   and the picker opens instead; anything else is passed on untouched. Windows come from the
-  Accessibility API, plus the window server for windows on other Spaces, and previews from
-  ScreenCaptureKit. The window you pick comes forward on its own, as if you'd clicked it, rather than
-  with every window of its app: that takes the window server's private calls (the ones AltTab and
-  yabai use), looked up at run time; without them, the whole app comes forward.
+  Accessibility API, plus the window server for windows on other Spaces, which Accessibility leaves
+  out; to bring those forward or close them, DeskKit asks the app for its elements by number until
+  it finds them, as AltTab does. Previews come from ScreenCaptureKit, except for windows on other
+  Spaces, which it can't capture: those come from the window server's own capture call. Both are
+  private API, looked up at run time; without them, those windows show the app's icon and can't be
+  closed from the picker. The window you pick comes forward on its own, as if you'd clicked it,
+  rather than with every window of its app: that takes the window server's private calls (the ones
+  AltTab and yabai use), looked up at run time; without them, the whole app comes forward.
 - **Reversing the mouse wheel** is another event tap, which flips scroll events that aren't continuous.
 
 ## Differences from the real Dock
