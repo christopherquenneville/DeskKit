@@ -114,6 +114,53 @@ MainActor.assumeIsolated {
     let middle = magnified(over: tiles.count / 2)
     check("magnifying the middle shares the overflow between both ends",
           middle.start < visible.lowerBound && middle.end > visible.upperBound)
+
+    // MARK: System stats
+
+    check("SMC names become codes and back", SMC.code("Tp01") == 0x5470_3031 && SMC.text(0x5470_3031) == "Tp01")
+    let float = withUnsafeBytes(of: Float(64.5).bitPattern.littleEndian) { Array($0) }
+    check("an Apple silicon sensor's float is read", SMC.decode(float, type: SMC.code("flt ")) == 64.5)
+    check("an Intel sensor's sp78 is read", SMC.decode([0x40, 0x80], type: SMC.code("sp78")) == 64.5)
+    check("a negative sp78 is read", SMC.decode([0xFF, 0x00], type: SMC.code("sp78")) == -1)
+    check("the SMC's integers are big-endian", SMC.decode([0, 0, 0x0F, 0x1A], type: SMC.code("ui32")) == 3866)
+    check("an unknown type isn't guessed at", SMC.decode([1, 2], type: SMC.code("ch8*")) == nil)
+    check("unread and disconnected sensors are left out of the average", TemperatureSensors.average([64, 66, 0, -9201]) == 65)
+    check("no readable sensor means no temperature", TemperatureSensors.average([0, 200]) == nil)
+    let thinned = TemperatureSensors.spread(Array(0..<84), limit: 24)
+    check("a long sensor list is thinned evenly", thinned.count == 24 && thinned.first == 0 && (thinned.last ?? 0) >= 80)
+    check("a short sensor list is kept whole", TemperatureSensors.spread([1, 2, 3], limit: 24) == [1, 2, 3])
+
+    let earlier = CPUTicks(user: 100, system: 50, idle: 850, nice: 0)
+    check("CPU use is the busy share of the ticks since the last reading",
+          CPUTicks(user: 160, system: 70, idle: 1770, nice: 0).usage(since: earlier) == 0.08)
+    let wrapped = CPUTicks(user: 10, system: 0, idle: 40, nice: 0).usage(since: CPUTicks(user: .max - 9, system: 0, idle: .max - 39, nice: 0))
+    check("CPU use survives the tick counters wrapping around", wrapped == 0.2)
+    check("no ticks since the last reading means no CPU use", earlier.usage(since: earlier) == nil)
+
+    check("memory used counts app, wired and compressed memory, as Activity Monitor does",
+          SystemSnapshot.memoryUsed(anonymous: 1000, purgeable: 100, wired: 300, compressed: 200, pageSize: 16384) == 1400 * 16384)
+    check("more purgeable pages than app pages don't go below zero",
+          SystemSnapshot.memoryUsed(anonymous: 10, purgeable: 50, wired: 0, compressed: 0, pageSize: 4096) == 0)
+    check("the kernel's memory pressure levels are read",
+          MemoryPressure(level: 1) == .normal && MemoryPressure(level: 2) == .warning && MemoryPressure(level: 4) == .critical)
+
+    check("heavy thermal pressure counts as throttling", ThermalPressure(rawValue: 2) == .heavy && ThermalPressure.heavy.throttling.hasPrefix("Yes"))
+    check("nominal thermal pressure isn't throttling", ThermalPressure.nominal.throttling == "None")
+    check("ProcessInfo's fair state is read as moderate pressure", ThermalPressure(ProcessInfo.ThermalState.fair) == .moderate)
+
+    check("shares show as whole percentages", StatsFormat.percent(0.234) == "23%" && StatsFormat.percent(1.2) == "100%")
+    check("memory shows in gigabytes", StatsFormat.gigabytes(36 << 30) == "36 GB")
+    check("a Mac without sensors says so", StatsFormat.temperatures(cpu: nil, gpu: nil, searched: true) == "Not available")
+    let stats = StatsView()
+    check("the stats fit in a menu", stats.frame.width > 200 && stats.frame.width < 420 && stats.frame.height > 50)
+
+    // MARK: Stray pointer moves
+
+    var flood = StrayMoveGuard.Counter()
+    let floodCaught = (0..<StrayMoveGuard.limit).map { flood.add(at: 100 + Double($0) * 0.001) }
+    check("a stream of moves away from DeskKit's windows is caught", floodCaught.last == true && floodCaught.dropLast().allSatisfy { !$0 })
+    var trickle = StrayMoveGuard.Counter()
+    check("the odd stray move over a long time isn't", !(0..<1000).contains { trickle.add(at: Double($0) * 0.1) })
 }
 
 print(failures == 0 ? "All tests passed." : "\(failures) test(s) failed.")

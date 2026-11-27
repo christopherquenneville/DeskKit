@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let dockClicks = DockClickWatcher()
     private let scroll = ScrollFlipper()
     private let updater = Updater()
+    private let strayMoves = StrayMoveGuard()
     private var statusItem: NSStatusItem?
     private let statusMenu = NSMenu()
     private var activity: NSObjectProtocol?
@@ -50,9 +51,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         hasAccessibility = Permissions.accessibility
         updateTools()
+        strayMoves.rebuildWindows = { [unowned self] in self.rebuildWindows() }
+        strayMoves.isFollowingPointer = { [unowned self] in self.picker.isShowing }
+        strayMoves.start()
         schedulePermissionCheck()
         askForPermissionsIfNeeded()
         updater.start()
+    }
+
+    /// Builds DeskKit's windows afresh: the Dock copies (with their labels and edge sensors), the
+    /// picker and the menu bar icon.
+    private func rebuildWindows() {
+        picker.dismiss()
+        bars?.stop()
+        bars = nil
+        updateTools()
+        if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+            updateStatusItem()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -210,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func fill(_ menu: NSMenu) {
         menu.removeAllItems()
+        let stats = NSMenuItem()
+        stats.view = StatsView()
+        menu.addItem(stats)
+        menu.addItem(.separator())
         let settings = Settings.shared
         addToggle(to: menu, "Dock on Every Display", #selector(toggleDock(_:)), settings.dockEnabled)
         let options = NSMenuItem(title: "Dock Options", action: nil, keyEquivalent: "")

@@ -11,7 +11,8 @@
 - **Reverse the mouse wheel.** Keep natural scrolling on the trackpad while a mouse wheel scrolls the
   traditional way.
 
-Each one can be turned on or off from DeskKit's menu bar icon. DeskKit runs on macOS 12 Monterey and
+Each one can be turned on or off from DeskKit's menu bar icon, whose menu also shows CPU and memory use,
+temperatures, and whether macOS is slowing your Mac down to cool it. DeskKit runs on macOS 12 Monterey and
 later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one CPU core and about
 30 MB of memory, and moving the pointer around anywhere but its Docks costs it nothing.
 
@@ -69,6 +70,21 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
 Trackpads and the Magic Mouse send continuous scrolling and mouse wheels send notched steps, so
 DeskKit reverses only the notched ones: natural scrolling on the trackpad, traditional scrolling on the
 wheel. It's off until you turn on *Reverse Mouse Wheel* in the menu.
+
+## System stats
+
+The top of DeskKit's menu (from its menu bar icon, or a right-click on an empty part of a Dock copy)
+shows how hard your Mac is working, read again every second while the menu is open:
+
+- **CPU**: how busy all the cores are together.
+- **Memory**: the share in use, counted like Activity Monitor's *Memory Used* (app memory, wired and
+  compressed); hover it for gigabytes. The bar turns yellow or red when macOS reports memory pressure.
+- **Temperature**: the average of the CPU's and the GPU's sensors, in your region's unit.
+- **Throttling**: whether macOS is slowing your Mac down to cool it, from the thermal pressure it
+  reports (the levels `powermetrics` shows): *None* at nominal pressure, *Not yet* at moderate, and
+  *Yes* from heavy on.
+
+Nothing is read while the menu is closed, and none of it needs a permission.
 
 ## Permissions
 
@@ -160,7 +176,10 @@ explains the one-time setup it needs).
   hidden). The Dock's display and settings are checked again when the pointer pushes against a
   display's Dock edge, which is how the Dock moves, when a display's usable area changes, which is how
   a resized Dock shows, and every 2 seconds besides. With a single display, where no copy can
-  show, DeskKit stops following the Dock and other apps' windows altogether.
+  show, DeskKit stops following the Dock and other apps' windows altogether. If macOS ever starts
+  sending DeskKit every move of the pointer anyway (one copy of DeskKit was found getting them
+  after a day of use), DeskKit notices within a few seconds of mouse movement, builds its windows
+  again, and, if the moves keep coming, restarts itself.
 - **Keeping windows clear.** DeskKit watches windows being created, moved and resized through the
   Accessibility API, and once a zoom or tile has settled it pulls the window's edge out of the strip
   the Dock would reserve (the copy plus its gap from the screen edge).
@@ -176,6 +195,12 @@ explains the one-time setup it needs).
   rather than with every window of its app: that takes the window server's private calls (the ones
   AltTab and yabai use), looked up at run time; without them, the whole app comes forward.
 - **Reversing the mouse wheel** is another event tap, which flips scroll events that aren't continuous.
+- **System stats** come from the kernel's CPU and memory counters (the ones `top` reads), the thermal
+  pressure level macOS posts for apps (`com.apple.system.thermalpressurelevel`; `ProcessInfo.thermalState`
+  sums it up in four steps and calls both moderate and heavy "fair"), and, for temperatures, the SMC,
+  the chip that runs the fans, through IOKit. The SMC's sensors aren't documented: on Apple silicon
+  DeskKit averages the ones named `Tp…` (CPU) and `Tg…` (GPU), as Stats and macmon do, and on Intel
+  Macs it reads the CPU and GPU die sensors. If it finds none, the menu leaves temperatures out.
 
 ## Differences from the real Dock
 
