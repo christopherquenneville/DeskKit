@@ -180,18 +180,21 @@ MainActor.assumeIsolated {
 
     // MARK: Built-in display
 
-    let builtIn: CGDirectDisplayID = 1, monitor: CGDirectDisplayID = 4
-    check("with the lid open and a monitor connected, the built-in display goes off",
-          BuiltInDisplay.action(wanted: true, active: [(id: builtIn, builtIn: true), (id: monitor, builtIn: false)], off: nil) == .turnOff(builtIn))
-    check("it stays off while a monitor is connected",
-          BuiltInDisplay.action(wanted: true, active: [(id: monitor, builtIn: false)], off: builtIn) == BuiltInDisplay.Action.none)
-    check("it comes back when the last monitor goes", BuiltInDisplay.action(wanted: true, active: [], off: builtIn) == .turnOn(builtIn))
-    check("it comes back when the setting is turned off",
-          BuiltInDisplay.action(wanted: false, active: [(id: monitor, builtIn: false)], off: builtIn) == .turnOn(builtIn))
-    check("with the lid closed there's nothing to turn off",
-          BuiltInDisplay.action(wanted: true, active: [(id: monitor, builtIn: false)], off: nil) == BuiltInDisplay.Action.none)
-    check("without a monitor the built-in display stays on",
-          BuiltInDisplay.action(wanted: true, active: [(id: builtIn, builtIn: true)], off: nil) == BuiltInDisplay.Action.none)
+    let builtIn: CGDirectDisplayID = 1
+    @MainActor func builtInAction(wanted: Bool = true, lidOpen: Bool = true, on: Bool, monitors: Bool, ours: Bool = false) -> BuiltInDisplay.Action {
+        BuiltInDisplay.action(wanted: wanted, lidOpen: lidOpen, builtIn: builtIn, builtInOn: on, monitors: monitors, turnedOffByDeskKit: ours)
+    }
+    check("with the lid open and a monitor on, the built-in display goes off", builtInAction(on: true, monitors: true) == .turnOff(builtIn))
+    check("it stays off while a monitor is on", builtInAction(on: false, monitors: true, ours: true) == BuiltInDisplay.Action.none)
+    check("it comes back when the last monitor goes", builtInAction(on: false, monitors: false, ours: true) == .turnOn(builtIn))
+    check("it comes back without a monitor even if DeskKit lost track of turning it off",
+          builtInAction(on: false, monitors: false, ours: false) == .turnOn(builtIn))
+    check("it comes back when the setting is turned off", builtInAction(wanted: false, on: false, monitors: true, ours: true) == .turnOn(builtIn))
+    check("another app turning it off is left alone while a monitor is on",
+          builtInAction(wanted: false, on: false, monitors: true, ours: false) == BuiltInDisplay.Action.none)
+    check("with the lid closed nothing changes", builtInAction(lidOpen: false, on: false, monitors: false, ours: true) == BuiltInDisplay.Action.none)
+    check("without a monitor the built-in display stays on", builtInAction(on: true, monitors: false) == BuiltInDisplay.Action.none)
+    check("a display that reports no monitor (a virtual one) isn't a monitor", !BuiltInDisplay.isMonitor(9999) && !BuiltInDisplay.isReal(9999))
 
     // MARK: Stray pointer moves
 

@@ -227,8 +227,10 @@ explains the one-time setup it needs).
 - **The built-in display** is turned off with the window server's private call for switching a display
   on and off (`CGSConfigureDisplayEnabled`, which BetterDisplay and Lunar also use). A display turned
   off that way stays off until it's turned back on or you log out, even once DeskKit has quit, so
-  DeskKit turns it back on when it quits (even when stopped with `kill`) and remembers which display it
-  turned off, for a DeskKit that starts again.
+  DeskKit turns it back on whenever the lid is open and no monitor is on (a virtual display, which
+  macOS adds when it has no screen, doesn't count), when it quits (even when stopped with `kill`), and
+  remembers which display it turned off, for a DeskKit that starts again. While it has the screen off,
+  it checks again every 10 seconds.
 - **System stats** come from the kernel's CPU and memory counters and its memory pressure level (what
   `top` and Activity Monitor read), the busy figure each GPU's driver publishes in the I/O Registry,
   the thermal pressure level macOS posts for apps (`com.apple.system.thermalpressurelevel`;
