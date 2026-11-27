@@ -1,4 +1,5 @@
 import AppKit
+import IOKit
 import notify
 
 /// macOS's thermal pressure: how hard it's holding the Mac back to keep it cool. These are the
@@ -104,6 +105,8 @@ struct CPUTicks: Equatable, Sendable {
 struct SystemSnapshot: Sendable {
     /// From 0 to 1; nil until there's an earlier reading to compare with.
     var cpu: Double?
+    /// From 0 to 1, for the busiest GPU; nil when no GPU reports it.
+    var gpu: Double?
     var memoryUsed: UInt64 = 0
     var memoryTotal: UInt64 = 0
     var memoryPressure = MemoryPressure.normal
@@ -164,6 +167,7 @@ final class SystemMonitor: @unchecked Sendable {
             lastTicks = ticks
             lastTicksAt = now
         }
+        snapshot.gpu = Self.gpuUsage()
         readMemory(into: &snapshot)
         snapshot.thermalPressure = thermalPressure()
         if let sensors {
@@ -186,6 +190,28 @@ final class SystemMonitor: @unchecked Sendable {
         let found = sensors.map { "\($0.cpu.count) CPU and \($0.gpu.count) GPU" } ?? "no"
         appLog.info("Found \(found, privacy: .public) temperature sensors")
         if sensors?.isEmpty == true { smc = nil }
+    }
+
+    /// Whether this Mac's GPU reports how busy it is (virtual machines' may not).
+    static let gpuAvailable = gpuUsage() != nil
+
+    /// How busy the busiest GPU is, from 0 to 1, as its driver reports it in the I/O Registry.
+    static func gpuUsage() -> Double? {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+        var busiest: Double?
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            if let stats = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any],
+               let percent = (stats["Device Utilization %"] ?? stats["GPU Activity(%)"]) as? NSNumber {
+                busiest = max(busiest ?? 0, min(1, max(0, percent.doubleValue / 100)))
+            }
+            IOObjectRelease(service)
+            service = IOIteratorNext(iterator)
+        }
+        return busiest
     }
 
     private func cpuTicks() -> CPUTicks? {

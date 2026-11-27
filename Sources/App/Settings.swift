@@ -49,6 +49,21 @@ final class Settings {
         set { defaults.set(newValue, forKey: "ShowOnDockDisplay") }
     }
 
+    /// On a laptop, the built-in display is off while external displays are connected.
+    var builtInDisplayOff: Bool {
+        get { defaults.object(forKey: "BuiltInDisplayOff") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "BuiltInDisplayOff") }
+    }
+
+    /// The display DeskKit has turned off. Turning a display off outlasts the process that did it, so
+    /// a DeskKit that starts again needs to know, to turn it back on when the monitors go.
+    var builtInDisplayTurnedOff: UInt32? {
+        get { (defaults.object(forKey: "BuiltInDisplayTurnedOff") as? NSNumber)?.uint32Value }
+        set {
+            if let newValue { defaults.set(NSNumber(value: newValue), forKey: "BuiltInDisplayTurnedOff") } else { defaults.removeObject(forKey: "BuiltInDisplayTurnedOff") }
+        }
+    }
+
     /// Move zoomed and tiled windows out from under the bars (needs Accessibility access).
     var keepWindowsClear: Bool {
         get { defaults.object(forKey: "KeepWindowsClear") as? Bool ?? true }

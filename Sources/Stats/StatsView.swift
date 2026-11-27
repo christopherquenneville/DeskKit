@@ -1,12 +1,14 @@
 import AppKit
 
-/// The top of DeskKit's menu: CPU and memory use, memory pressure, temperatures and throttling,
+/// The top of DeskKit's menu: CPU, GPU and memory use, memory pressure, temperatures and throttling,
 /// read again every second while the menu is open. Nothing is read while it's closed.
 @MainActor
 final class StatsView: NSView {
     private let cpuBar = MeterView()
+    private let gpuBar = MeterView()
     private let memoryBar = MeterView()
     private let cpuValue = StatsView.valueField()
+    private let gpuValue = StatsView.valueField()
     private let memoryValue = StatsView.valueField()
     private let pressureValue = StatsView.valueField()
     private let pressureDot = StatsView.dot()
@@ -17,11 +19,14 @@ final class StatsView: NSView {
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
-        var rows: [[NSView]] = [
-            [Self.nameField("CPU"), cpuBar, cpuValue],
-            [Self.nameField("Memory"), memoryBar, memoryValue],
-            [Self.nameField("Pressure"), Self.status(pressureDot, pressureValue), NSGridCell.emptyContentView],
-        ]
+        // Bars with a percentage, then rows of text across both columns.
+        var rows: [[NSView]] = [[Self.nameField("CPU"), cpuBar, cpuValue]]
+        if SystemMonitor.gpuAvailable {
+            rows.append([Self.nameField("GPU"), gpuBar, gpuValue])
+        }
+        rows.append([Self.nameField("Memory"), memoryBar, memoryValue])
+        let barRows = rows.count
+        rows.append([Self.nameField("Pressure"), Self.status(pressureDot, pressureValue), NSGridCell.emptyContentView])
         // Once DeskKit knows this Mac has no sensors it can read, the row goes.
         if SystemMonitor.shared.hasTemperatures != false {
             rows.append([Self.nameField("Temperature"), temperatureValue, NSGridCell.emptyContentView])
@@ -34,7 +39,7 @@ final class StatsView: NSView {
         grid.column(at: 1).xPlacement = .fill
         grid.column(at: 2).xPlacement = .trailing
         grid.column(at: 2).width = ceil(("100%" as NSString).size(withAttributes: [.font: Self.valueFont]).width) + 2
-        for index in 2..<grid.numberOfRows {
+        for index in barRows..<grid.numberOfRows {
             grid.row(at: index).mergeCells(in: NSRange(location: 1, length: 2))
         }
         grid.translatesAutoresizingMaskIntoConstraints = false
@@ -54,6 +59,7 @@ final class StatsView: NSView {
         autoresizingMask = [.width]
 
         cpuValue.stringValue = "–"
+        gpuValue.stringValue = "–"
         memoryValue.stringValue = "–"
         pressureValue.stringValue = "–"
         temperatureValue.stringValue = StatsFormat.temperatures(cpu: nil, gpu: nil, searched: false)
@@ -110,6 +116,10 @@ final class StatsView: NSView {
         if let cpu = snapshot.cpu {
             cpuBar.share = cpu
             cpuValue.stringValue = StatsFormat.percent(cpu)
+        }
+        if let gpu = snapshot.gpu {
+            gpuBar.share = gpu
+            gpuValue.stringValue = StatsFormat.percent(gpu)
         }
         if snapshot.memoryTotal > 0 {
             memoryBar.share = snapshot.memoryShare

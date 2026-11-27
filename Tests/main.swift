@@ -151,6 +151,7 @@ MainActor.assumeIsolated {
     check("nominal thermal pressure isn't throttling", ThermalPressure.nominal.throttling == "None")
     check("ProcessInfo's fair state is read as moderate pressure", ThermalPressure(ProcessInfo.ThermalState.fair) == .moderate)
 
+    check("the GPU's busy figure is read as a share", SystemMonitor.gpuUsage().map { (0...1).contains($0) } ?? true)
     check("shares show as whole percentages", StatsFormat.percent(0.234) == "23%" && StatsFormat.percent(1.2) == "100%")
     check("memory shows in gigabytes", StatsFormat.gigabytes(36 << 30) == "36 GB")
     check("a Mac without sensors says so", StatsFormat.temperatures(cpu: nil, gpu: nil, searched: true) == "Not available")
@@ -176,6 +177,21 @@ MainActor.assumeIsolated {
     check("an item in a submenu remembers where it is in the Dock's menu",
           (mirrored.items[3].submenu?.items[1].representedObject as? DockMenuChoice)?.path
               == [.init(index: 3, title: "Options"), .init(index: 1, title: "Open at Login")])
+
+    // MARK: Built-in display
+
+    let builtIn: CGDirectDisplayID = 1, monitor: CGDirectDisplayID = 4
+    check("with the lid open and a monitor connected, the built-in display goes off",
+          BuiltInDisplay.action(wanted: true, active: [(id: builtIn, builtIn: true), (id: monitor, builtIn: false)], off: nil) == .turnOff(builtIn))
+    check("it stays off while a monitor is connected",
+          BuiltInDisplay.action(wanted: true, active: [(id: monitor, builtIn: false)], off: builtIn) == BuiltInDisplay.Action.none)
+    check("it comes back when the last monitor goes", BuiltInDisplay.action(wanted: true, active: [], off: builtIn) == .turnOn(builtIn))
+    check("it comes back when the setting is turned off",
+          BuiltInDisplay.action(wanted: false, active: [(id: monitor, builtIn: false)], off: builtIn) == .turnOn(builtIn))
+    check("with the lid closed there's nothing to turn off",
+          BuiltInDisplay.action(wanted: true, active: [(id: monitor, builtIn: false)], off: nil) == BuiltInDisplay.Action.none)
+    check("without a monitor the built-in display stays on",
+          BuiltInDisplay.action(wanted: true, active: [(id: builtIn, builtIn: true)], off: nil) == BuiltInDisplay.Action.none)
 
     // MARK: Stray pointer moves
 

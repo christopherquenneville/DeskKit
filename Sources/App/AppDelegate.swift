@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let scroll = ScrollFlipper()
     private let updater = Updater()
     private let strayMoves = StrayMoveGuard()
+    private let builtInDisplay = BuiltInDisplay()
+    private var terminationSignal: DispatchSourceSignal?
     private var statusItem: NSStatusItem?
     private let statusMenu = NSMenu()
     private var activity: NSObjectProtocol?
@@ -54,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         strayMoves.rebuildWindows = { [unowned self] in self.rebuildWindows() }
         strayMoves.isFollowingPointer = { [unowned self] in self.picker.isShowing }
         strayMoves.start()
+        builtInDisplay.wanted = Settings.shared.builtInDisplayOff
+        builtInDisplay.start()
+        quitOnTerminationSignal()
         schedulePermissionCheck()
         askForPermissionsIfNeeded()
         updater.start()
@@ -71,6 +76,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem = nil
             updateStatusItem()
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // A display DeskKit turned off would stay off without it.
+        builtInDisplay.restore()
+    }
+
+    /// `kill` and `pkill` send SIGTERM, which would end DeskKit without `applicationWillTerminate`:
+    /// quit properly instead, so the built-in display is turned back on.
+    private func quitOnTerminationSignal() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated { NSApp.terminate(nil) }
+        }
+        source.resume()
+        terminationSignal = source
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -241,6 +263,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   settings.windowPickerEnabled)
         addToggle(to: menu, needingAccess("Reverse Mouse Wheel", settings.reverseMouseWheel), #selector(toggleReverseMouseWheel(_:)),
                   settings.reverseMouseWheel)
+        if BuiltInDisplay.isLaptop {
+            addToggle(to: menu, "Use Only External Displays", #selector(toggleBuiltInDisplayOff(_:)), settings.builtInDisplayOff)
+            menu.items.last?.toolTip = "While external displays are connected, the laptop's own screen stays off, even with the lid open."
+        }
 
         var access: [NSMenuItem] = []
         if wantsAccessibility && !hasAccessibility {
@@ -323,6 +349,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleReverseMouseWheel(_ sender: NSMenuItem) {
         Settings.shared.reverseMouseWheel.toggle()
         turnedOnTool(Settings.shared.reverseMouseWheel)
+    }
+
+    @objc private func toggleBuiltInDisplayOff(_ sender: NSMenuItem) {
+        Settings.shared.builtInDisplayOff.toggle()
+        builtInDisplay.wanted = Settings.shared.builtInDisplayOff
     }
 
     @objc private func toggleKeepWindowsClear(_ sender: NSMenuItem) {

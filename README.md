@@ -10,12 +10,14 @@
   copies, and pick the window you want from small previews. An X on each preview closes that window.
 - **Reverse the mouse wheel.** Keep natural scrolling on the trackpad while a mouse wheel scrolls the
   traditional way.
+- **Only your monitors.** On a laptop with monitors connected, the built-in screen stays off even with
+  the lid open, so the laptop can cool through its open lid without a third screen in the way.
 
-Each one can be turned on or off from DeskKit's menu bar icon, whose menu also shows CPU and memory
-use, memory pressure, temperatures, and whether macOS is slowing your Mac down to cool it. DeskKit
-runs on macOS 12 Monterey and later, on Apple silicon and Intel Macs. At rest it uses well under
-0.1% of one CPU core and about 30 MB of memory, and moving the pointer around anywhere but its Docks
-costs it nothing.
+Each one can be turned on or off from DeskKit's menu bar icon, whose menu also shows CPU, GPU and
+memory use, memory pressure, temperatures, and whether macOS is slowing your Mac down to cool it.
+DeskKit runs on macOS 12 Monterey and later, on Apple silicon and Intel Macs. At rest it uses well
+under 0.1% of one CPU core and about 30 MB of memory, and moving the pointer around anywhere but its
+Docks costs it nothing.
 
 ## A Dock on every display
 
@@ -73,12 +75,26 @@ Trackpads and the Magic Mouse send continuous scrolling and mouse wheels send no
 DeskKit reverses only the notched ones: natural scrolling on the trackpad, traditional scrolling on the
 wheel. It's off until you turn on *Reverse Mouse Wheel* in the menu.
 
+## Built-in display
+
+On a laptop with external displays connected, DeskKit turns the built-in screen off, as closing the
+lid would, while the lid stays open. An open lid lets the keyboard side of the case shed heat, which a
+closed lid traps, so a laptop working hard on a desk throttles less. It's on unless you turn off *Use
+Only External Displays* in the menu.
+
+The screen comes back on as soon as the last external display goes, when you turn the setting off, and
+when DeskKit quits; failing all those, when you log out or restart. Monitors that are switched off but
+still plugged in can still count as connected, which leaves the built-in screen off too: unplug one
+and the screen comes back.
+
 ## System stats
 
 The top of DeskKit's menu (from its menu bar icon, or a right-click on an empty part of a Dock copy)
 shows how hard your Mac is working, read again every second while the menu is open:
 
 - **CPU**: how busy all the cores are together.
+- **GPU**: how busy the graphics processor is, as its driver reports it. It also draws everything on
+  screen, so a game keeping it near 100% can make the whole Mac feel slow while the CPU looks idle.
 - **Memory**: the share in use, counted like Activity Monitor's *Memory Used* (app memory, wired and
   compressed); hover it for gigabytes. macOS keeps memory busy on purpose, so a high share is normal.
 - **Pressure**: whether memory is running short, as Activity Monitor's memory pressure graph shows
@@ -205,13 +221,19 @@ explains the one-time setup it needs).
   rather than with every window of its app: that takes the window server's private calls (the ones
   AltTab and yabai use), looked up at run time; without them, the whole app comes forward.
 - **Reversing the mouse wheel** is another event tap, which flips scroll events that aren't continuous.
+- **The built-in display** is turned off with the window server's private call for switching a display
+  on and off (`CGSConfigureDisplayEnabled`, which BetterDisplay and Lunar also use). A display turned
+  off that way stays off until it's turned back on or you log out, even once DeskKit has quit, so
+  DeskKit turns it back on when it quits (even when stopped with `kill`) and remembers which display it
+  turned off, for a DeskKit that starts again.
 - **System stats** come from the kernel's CPU and memory counters and its memory pressure level (what
-  `top` and Activity Monitor read), the thermal pressure level macOS posts for apps
-  (`com.apple.system.thermalpressurelevel`; `ProcessInfo.thermalState` sums it up in four steps and
-  calls both moderate and heavy "fair"), and, for temperatures, the SMC, the chip that runs the fans,
-  through IOKit. The SMC's sensors aren't documented: on Apple silicon DeskKit averages the ones named
-  `Tp…` (CPU) and `Tg…` (GPU), as Stats and macmon do, and on Intel Macs it reads the CPU and GPU die
-  sensors. If it finds none, the menu leaves temperatures out.
+  `top` and Activity Monitor read), the busy figure each GPU's driver publishes in the I/O Registry,
+  the thermal pressure level macOS posts for apps (`com.apple.system.thermalpressurelevel`;
+  `ProcessInfo.thermalState` sums it up in four steps and calls both moderate and heavy "fair"), and,
+  for temperatures, the SMC, the chip that runs the fans, through IOKit. The SMC's sensors aren't
+  documented: on Apple silicon DeskKit averages the ones named `Tp…` (CPU) and `Tg…` (GPU), as Stats
+  and macmon do, and on Intel Macs it reads the CPU and GPU die sensors. If it finds none, the menu
+  leaves temperatures out.
 
 ## Differences from the real Dock
 
