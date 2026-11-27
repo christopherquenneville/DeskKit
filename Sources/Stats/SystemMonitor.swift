@@ -56,6 +56,33 @@ enum MemoryPressure: Sendable {
     init(level: Int32) {
         self = level >= 4 ? .critical : level >= 2 ? .warning : .normal
     }
+
+    static let allLevels: [MemoryPressure] = [.normal, .warning, .critical]
+
+    /// What Activity Monitor's memory pressure graph means by its green, yellow and red.
+    var summary: String {
+        switch self {
+        case .normal: return "Normal"
+        case .warning: return "High, compressing memory"
+        case .critical: return "Critical, using the disk"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .normal: return "Memory is available."
+        case .warning: return "Memory is still available, but macOS is compressing it to make room."
+        case .critical: return "Memory has run out, and macOS is using the startup disk for it."
+        }
+    }
+
+    var color: NSColor {
+        switch self {
+        case .normal: return .systemGreen
+        case .warning: return .systemYellow
+        case .critical: return .systemRed
+        }
+    }
 }
 
 /// The kernel's running totals of CPU time, in ticks, across all cores.

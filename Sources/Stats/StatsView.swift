@@ -1,36 +1,32 @@
 import AppKit
 
-/// The top of DeskKit's menu: CPU and memory use, temperatures and throttling, read again every
-/// second while the menu is open. Nothing is read while it's closed.
+/// The top of DeskKit's menu: CPU and memory use, memory pressure, temperatures and throttling,
+/// read again every second while the menu is open. Nothing is read while it's closed.
 @MainActor
 final class StatsView: NSView {
     private let cpuBar = MeterView()
     private let memoryBar = MeterView()
     private let cpuValue = StatsView.valueField()
     private let memoryValue = StatsView.valueField()
+    private let pressureValue = StatsView.valueField()
+    private let pressureDot = StatsView.dot()
     private let temperatureValue = StatsView.valueField()
     private let throttlingValue = StatsView.valueField()
-    private let throttlingDot = NSImageView()
+    private let throttlingDot = StatsView.dot()
     private var timer: Timer?
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
-        let dot = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
-        throttlingDot.image = dot?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .regular))
-        throttlingDot.contentTintColor = .tertiaryLabelColor
-        throttlingDot.setAccessibilityElement(false)
-        let throttling = NSStackView(views: [throttlingDot, throttlingValue])
-        throttling.spacing = 5
-
         var rows: [[NSView]] = [
             [Self.nameField("CPU"), cpuBar, cpuValue],
             [Self.nameField("Memory"), memoryBar, memoryValue],
+            [Self.nameField("Pressure"), Self.status(pressureDot, pressureValue), NSGridCell.emptyContentView],
         ]
         // Once DeskKit knows this Mac has no sensors it can read, the row goes.
         if SystemMonitor.shared.hasTemperatures != false {
             rows.append([Self.nameField("Temperature"), temperatureValue, NSGridCell.emptyContentView])
         }
-        rows.append([Self.nameField("Throttling"), throttling, NSGridCell.emptyContentView])
+        rows.append([Self.nameField("Throttling"), Self.status(throttlingDot, throttlingValue), NSGridCell.emptyContentView])
         let grid = NSGridView(views: rows)
         grid.columnSpacing = 10
         grid.rowSpacing = 5
@@ -51,6 +47,7 @@ final class StatsView: NSView {
         ])
 
         // Wide enough for the longest values, so nothing is cut off when they change.
+        pressureValue.stringValue = MemoryPressure.allLevels.map(\.summary).max { $0.count < $1.count } ?? ""
         temperatureValue.stringValue = StatsFormat.temperatures(cpu: 100, gpu: 100, searched: true)
         throttlingValue.stringValue = ThermalPressure.allLevels.map(\.throttling).max { $0.count < $1.count } ?? ""
         frame.size = fittingSize
@@ -58,6 +55,7 @@ final class StatsView: NSView {
 
         cpuValue.stringValue = "–"
         memoryValue.stringValue = "–"
+        pressureValue.stringValue = "–"
         temperatureValue.stringValue = StatsFormat.temperatures(cpu: nil, gpu: nil, searched: false)
         throttlingValue.stringValue = "–"
     }
@@ -124,6 +122,9 @@ final class StatsView: NSView {
             let detail = "\(StatsFormat.gigabytes(snapshot.memoryUsed)) of \(StatsFormat.gigabytes(snapshot.memoryTotal)) in use"
             memoryBar.toolTip = detail
             memoryValue.toolTip = detail
+            pressureValue.stringValue = snapshot.memoryPressure.summary
+            pressureValue.toolTip = snapshot.memoryPressure.detail
+            pressureDot.contentTintColor = snapshot.memoryPressure.color
         }
         temperatureValue.stringValue = StatsFormat.temperatures(cpu: snapshot.cpuTemperature, gpu: snapshot.gpuTemperature,
                                                                 searched: snapshot.temperaturesSearched)
@@ -136,6 +137,22 @@ final class StatsView: NSView {
 
     private static let font = NSFont.menuFont(ofSize: 0)
     private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: .regular)
+
+    /// A small coloured dot for a status, like the one Activity Monitor's graphs suggest.
+    private static func dot() -> NSImageView {
+        let view = NSImageView()
+        let image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+        view.image = image?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .regular))
+        view.contentTintColor = .tertiaryLabelColor
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    private static func status(_ dot: NSImageView, _ text: NSTextField) -> NSStackView {
+        let stack = NSStackView(views: [dot, text])
+        stack.spacing = 5
+        return stack
+    }
 
     private static func nameField(_ text: String) -> NSTextField {
         let field = NSTextField(labelWithString: text)

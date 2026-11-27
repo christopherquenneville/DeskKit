@@ -143,6 +143,9 @@ MainActor.assumeIsolated {
           SystemSnapshot.memoryUsed(anonymous: 10, purgeable: 50, wired: 0, compressed: 0, pageSize: 4096) == 0)
     check("the kernel's memory pressure levels are read",
           MemoryPressure(level: 1) == .normal && MemoryPressure(level: 2) == .warning && MemoryPressure(level: 4) == .critical)
+    check("memory pressure is told in Activity Monitor's terms",
+          MemoryPressure.normal.summary == "Normal" && MemoryPressure.warning.summary.hasPrefix("High")
+              && MemoryPressure.critical.summary.hasPrefix("Critical"))
 
     check("heavy thermal pressure counts as throttling", ThermalPressure(rawValue: 2) == .heavy && ThermalPressure.heavy.throttling.hasPrefix("Yes"))
     check("nominal thermal pressure isn't throttling", ThermalPressure.nominal.throttling == "None")
@@ -153,6 +156,26 @@ MainActor.assumeIsolated {
     check("a Mac without sensors says so", StatsFormat.temperatures(cpu: nil, gpu: nil, searched: true) == "Not available")
     let stats = StatsView()
     check("the stats fit in a menu", stats.frame.width > 200 && stats.frame.width < 420 && stats.frame.height > 50)
+
+    // MARK: The Dock's icon menus
+
+    let dockEntries: [DockMenuMirror.Entry] = [
+        .init(title: "Front window", mark: "✓"),
+        .init(title: "Minimized window", mark: "◆"),
+        .init(title: "", enabled: false),
+        .init(title: "Options", submenu: [.init(title: "Keep in Dock", mark: "✓"), .init(title: "Open at Login")]),
+        .init(title: "Hide"),
+        .init(title: "Hide Others", optionAlternate: true),
+    ]
+    let mirrored = DockMenuMirror.menu(from: dockEntries, for: Tile(id: "app", kind: .app))
+    check("the Dock's menu is copied item for item", mirrored.items.count == 6 && mirrored.items[2].isSeparatorItem
+              && mirrored.items[3].submenu?.items.map(\.title) == ["Keep in Dock", "Open at Login"])
+    check("the front window is checked and a minimized one marked with a diamond",
+          mirrored.items[0].state == .on && mirrored.items[1].onStateImage?.accessibilityDescription == "◆")
+    check("Option shows Hide Others in place of Hide", mirrored.items[5].isAlternate && mirrored.items[5].keyEquivalentModifierMask == .option)
+    check("an item in a submenu remembers where it is in the Dock's menu",
+          (mirrored.items[3].submenu?.items[1].representedObject as? DockMenuChoice)?.path
+              == [.init(index: 3, title: "Options"), .init(index: 1, title: "Open at Login")])
 
     // MARK: Stray pointer moves
 

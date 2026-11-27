@@ -618,7 +618,12 @@ final class BarManager: NSObject {
 
     func appMenu() -> NSMenu { makeAppMenu() }
 
+    /// The Dock's own menu for the tile's icon when it can be read (see `DockMenuMirror`), or a
+    /// shorter one of DeskKit's.
     func menu(for tile: Tile) -> NSMenu {
+        if let entries = DockMenuMirror.entries(for: tile) {
+            return DockMenuMirror.menu(from: entries, for: tile)
+        }
         let menu = NSMenu()
         menu.autoenablesItems = false
         @discardableResult

@@ -11,10 +11,11 @@
 - **Reverse the mouse wheel.** Keep natural scrolling on the trackpad while a mouse wheel scrolls the
   traditional way.
 
-Each one can be turned on or off from DeskKit's menu bar icon, whose menu also shows CPU and memory use,
-temperatures, and whether macOS is slowing your Mac down to cool it. DeskKit runs on macOS 12 Monterey and
-later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one CPU core and about
-30 MB of memory, and moving the pointer around anywhere but its Docks costs it nothing.
+Each one can be turned on or off from DeskKit's menu bar icon, whose menu also shows CPU and memory
+use, memory pressure, temperatures, and whether macOS is slowing your Mac down to cool it. DeskKit
+runs on macOS 12 Monterey and later, on Apple silicon and Intel Macs. At rest it uses well under
+0.1% of one CPU core and about 30 MB of memory, and moving the pointer around anywhere but its Docks
+costs it nothing.
 
 ## A Dock on every display
 
@@ -29,10 +30,11 @@ later, on Apple silicon and Intel Macs. At rest it uses well under 0.1% of one C
   animations. Change something in the Dock and the copies follow within two seconds, and a resized
   Dock straight away.
 - **Works like the Dock**: click to open an app or bring it forward (it reopens a window if it has
-  none), open folders, files and the Trash; right-click or Control-click for Hide/Show, Show in
-  Finder and Quit (hold Option for Force Quit); drop files on an app to open them with it, or on the
-  Trash to move them there (for a protected item, such as an app installed for all users, Finder asks
-  for your password, as with the Dock's Trash). Launching apps bounce until they've finished launching.
+  none), open folders, files and the Trash; right-click or Control-click for the Dock's own menu for
+  that icon, with the app's windows, its own items (such as Terminal's New Window), Options, Show All
+  Windows, Hide and Quit; drop files on an app to open them with it, or on the Trash to move them
+  there (for a protected item, such as an app installed for all users, Finder asks for your password,
+  as with the Dock's Trash). Launching apps bounce until they've finished launching.
 - **Looks like the Dock**: Liquid Glass on macOS 26 and later (tuned against the real Dock), vibrancy
   on earlier versions, with name labels, magnification and light and dark mode.
 - **Hiding**, under *Dock Options* in the menu (or right-click an empty part of a copy):
@@ -78,7 +80,10 @@ shows how hard your Mac is working, read again every second while the menu is op
 
 - **CPU**: how busy all the cores are together.
 - **Memory**: the share in use, counted like Activity Monitor's *Memory Used* (app memory, wired and
-  compressed); hover it for gigabytes. The bar turns yellow or red when macOS reports memory pressure.
+  compressed); hover it for gigabytes. macOS keeps memory busy on purpose, so a high share is normal.
+- **Pressure**: whether memory is running short, as Activity Monitor's memory pressure graph shows
+  it: *Normal*; *High* while macOS is compressing memory to make room; *Critical* once it's using the
+  disk for memory. The memory bar turns yellow or red with it.
 - **Temperature**: the average of the CPU's and the GPU's sensors, in your region's unit.
 - **Throttling**: whether macOS is slowing your Mac down to cool it, from the thermal pressure it
   reports (the levels `powermetrics` shows): *None* at nominal pressure, *Not yet* at moderate, and
@@ -90,7 +95,7 @@ Nothing is read while the menu is closed, and none of it needs a permission.
 
 | Permission | Used for | Without it |
 | --- | --- | --- |
-| **Accessibility** (called *Device Control and Data Access* in macOS 27) | the window picker, reversing the mouse wheel, keeping windows clear of the copies | those three are off; the copies of the Dock still work |
+| **Accessibility** (called *Device Control and Data Access* in macOS 27) | the window picker, reversing the mouse wheel, keeping windows clear of the copies, the Dock's own menu on the copies' icons | those are off, and a copy's icon menu has only Hide, Show in Finder and Quit; the copies of the Dock still work |
 | **Screen Recording** (*Screen & System Audio Recording* in macOS 15 and later) | window previews in the picker | the picker shows the app's icon instead |
 | **Automation** (to control Finder; asked the first time it's needed) | moving protected items you drop on a copy's Trash, with your password | those items stay where they are |
 
@@ -171,6 +176,11 @@ explains the one-time setup it needs).
   hidden on a display showing a full-screen app (the window server's Spaces list says which; private
   API, looked up at run time). Clicks pass through its transparent parts. Its icons are
   Core Animation layers showing bitmaps made once, so magnifying only moves and resizes them.
+- **Icon menus.** The Dock builds an icon's menu, with the items apps hand only to the Dock (such as
+  Terminal's New Window), when asked through the Accessibility API. When you right-click an icon on a
+  copy, DeskKit asks the Dock for that icon's menu, reads it and closes it straight away (it shows
+  beside the real Dock for a frame or so), and shows the same menu beside the copy's icon. Choosing an
+  item opens the Dock's menu again and picks it there, so it does exactly what the Dock would.
 - **Staying light.** DeskKit never watches the pointer across the whole screen. A copy hears about it
   only while the pointer is over it (or over a one-point sensor along the edge while the copy is
   hidden). The Dock's display and settings are checked again when the pointer pushes against a
@@ -195,12 +205,13 @@ explains the one-time setup it needs).
   rather than with every window of its app: that takes the window server's private calls (the ones
   AltTab and yabai use), looked up at run time; without them, the whole app comes forward.
 - **Reversing the mouse wheel** is another event tap, which flips scroll events that aren't continuous.
-- **System stats** come from the kernel's CPU and memory counters (the ones `top` reads), the thermal
-  pressure level macOS posts for apps (`com.apple.system.thermalpressurelevel`; `ProcessInfo.thermalState`
-  sums it up in four steps and calls both moderate and heavy "fair"), and, for temperatures, the SMC,
-  the chip that runs the fans, through IOKit. The SMC's sensors aren't documented: on Apple silicon
-  DeskKit averages the ones named `Tp…` (CPU) and `Tg…` (GPU), as Stats and macmon do, and on Intel
-  Macs it reads the CPU and GPU die sensors. If it finds none, the menu leaves temperatures out.
+- **System stats** come from the kernel's CPU and memory counters and its memory pressure level (what
+  `top` and Activity Monitor read), the thermal pressure level macOS posts for apps
+  (`com.apple.system.thermalpressurelevel`; `ProcessInfo.thermalState` sums it up in four steps and
+  calls both moderate and heavy "fair"), and, for temperatures, the SMC, the chip that runs the fans,
+  through IOKit. The SMC's sensors aren't documented: on Apple silicon DeskKit averages the ones named
+  `Tp…` (CPU) and `Tg…` (GPU), as Stats and macmon do, and on Intel Macs it reads the CPU and GPU die
+  sensors. If it finds none, the menu leaves temperatures out.
 
 ## Differences from the real Dock
 
@@ -208,7 +219,6 @@ explains the one-time setup it needs).
   its newest items.
 - No minimized windows, no live icons drawn by apps (Calendar's date, Activity Monitor's graphs),
   and no bounce when an app asks for attention.
-- App menus are shorter: no window list or *Options* submenu.
 - You can't drag items to rearrange or remove them; do that in the real Dock.
 
 ## License
