@@ -20,6 +20,10 @@ final class DockClickWatcher: NSObject {
     private var holdTimer: Timer?
     private var geometry: (orientation: DockOrientation, reach: CGFloat) = (.bottom, 0)
     private var geometryReadAt: CFTimeInterval = -.infinity
+    /// While the app in front hides the Dock (a game, say), there's no icon to click: the click tap is
+    /// off then, so DeskKit isn't on the path of every click.
+    private var paused = false
+    private var presentationObservation: NSKeyValueObservation?
 
     private struct Held {
         let down: CGEvent
@@ -45,15 +49,38 @@ final class DockClickWatcher: NSObject {
         self.clickTap = clickTap
         self.dragTap = dragTap
         isRunning = true
+        paused = false
         appLog.info("Watching clicks on the Dock")
+        presentationObservation = NSApp.observe(\.currentSystemPresentationOptions) { [weak self] _, _ in
+            Task { @MainActor in self?.updatePause() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appActivated(_:)),
+                                                          name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        updatePause()
         return true
     }
 
     func stop() {
         guard isRunning else { return }
+        presentationObservation = nil
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         release()
         removeTaps()
         isRunning = false
+    }
+
+    @objc private func appActivated(_ note: Notification) {
+        updatePause()
+    }
+
+    private func updatePause() {
+        guard isRunning, let clickTap else { return }
+        let dockHidden = DockRequest(NSApp.currentSystemPresentationOptions) == .hide
+        guard dockHidden != paused else { return }
+        paused = dockHidden
+        if dockHidden { release() }
+        CGEvent.tapEnable(tap: clickTap, enable: !dockHidden)
+        appLog.info("\(dockHidden ? "Pausing" : "Resuming", privacy: .public) watching clicks: the app in front \(dockHidden ? "hides" : "shows", privacy: .public) the Dock")
     }
 
     /// A tap at the head of the session, added to the main run loop but not yet enabled.
@@ -81,7 +108,7 @@ final class DockClickWatcher: NSObject {
     }
 
     fileprivate func reenable() {
-        if let clickTap { CGEvent.tapEnable(tap: clickTap, enable: true) }
+        if let clickTap, !paused { CGEvent.tapEnable(tap: clickTap, enable: true) }
         if held != nil, let dragTap { CGEvent.tapEnable(tap: dragTap, enable: true) }
     }
 

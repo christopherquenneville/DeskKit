@@ -201,11 +201,14 @@ explains the one-time setup it needs).
   only while the pointer is over it (or over a one-point sensor along the edge while the copy is
   hidden). The Dock's display and settings are checked again when the pointer pushes against a
   display's Dock edge, which is how the Dock moves, when a display's usable area changes, which is how
-  a resized Dock shows, and every 2 seconds besides. With a single display, where no copy can
-  show, DeskKit stops following the Dock and other apps' windows altogether. If macOS ever starts
-  sending DeskKit every move of the pointer anyway (one copy of DeskKit was found getting them
-  after a day of use), DeskKit notices within a few seconds of mouse movement, builds its windows
-  again, and, if the moves keep coming, restarts itself.
+  a resized Dock shows, and every 2 seconds besides. While every copy is out of sight (a game hid
+  the Dock, or each display shows a full-screen app), those checks wait until one can show again,
+  and while the app in front hides the Dock, DeskKit stops watching clicks, so a game's clicks don't
+  pass through it. With a single display, where no copy can show, DeskKit stops following the Dock
+  and other apps' windows altogether. If macOS ever starts sending DeskKit every move of the pointer
+  anyway (one copy of DeskKit was found getting them after a day of use), DeskKit notices within a
+  few seconds of mouse movement, builds its windows again, and, if the moves keep coming, restarts
+  itself.
 - **Keeping windows clear.** DeskKit watches windows being created, moved and resized through the
   Accessibility API, and once a zoom or tile has settled it pulls the window's edge out of the strip
   the Dock would reserve (the copy plus its gap from the screen edge).

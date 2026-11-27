@@ -202,6 +202,12 @@ final class BarController: NSObject {
         return effectiveHideMode == .whenCovered || effectiveHideMode == .always
     }
 
+    /// Hidden for a reason the pointer can't change (the Dock's own display, a full-screen app, or an
+    /// app that hid the Dock), so nothing about it needs keeping current until that changes.
+    var isOutOfSight: Bool {
+        (isDockDisplay && !Settings.shared.showOnDockDisplay) || fullScreen || appRequest == .hide
+    }
+
     private var shouldShow: Bool {
         if isDockDisplay && !Settings.shared.showOnDockDisplay { return false }
         if fullScreen || appRequest == .hide { return false }

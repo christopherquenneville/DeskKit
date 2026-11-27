@@ -284,12 +284,15 @@ final class BarManager: NSObject {
     }
 
     @objc private func prefsTick(_ timer: Timer) {
-        // Anything that moved the Dock without the pointer pushing an edge is caught here.
-        checkDockDisplay()
-        refreshPrefs(force: false)
         // A full-screen app that quits may take its Space away without a Space change being announced.
         if bars.values.contains(where: \.fullScreen) { checkFullScreen() }
         checkAppRequest()
+        // While every bar is out of sight (a game hid the Dock, or each display shows a full-screen
+        // app), there's nothing to keep current: the Dock's settings and badges wait until one shows.
+        guard bars.values.contains(where: { !$0.isOutOfSight }) else { return }
+        // Anything that moved the Dock without the pointer pushing an edge is caught here.
+        checkDockDisplay()
+        refreshPrefs(force: false)
         if ticks % 5 == 0 { restoreLostBars() }
     }
 
